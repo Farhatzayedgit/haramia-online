@@ -1203,7 +1203,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v17-0727-1327";
+var BUILD_VERSION = "v18-0727-1336";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1505,7 +1505,7 @@ function revealScreen() {
     '<div class="hint">اضغط مطوّل عشان تشوف كارتك</div></div>' +
     '<div class="face bk" style="background:' + meta.color + ";color:" + meta.ink + '">' +
     emblem(role, 50, meta.ink) + '<div class="rn">' + meta.label + '</div><div class="rd">' + desc + "</div>" +
-    (state.you.partners.length ? '<div class="pt">شركاؤك: ' + esc(state.you.partners.join(" · ")) + "</div>" : "") +
+    ((state.you.partners || []).length ? '<div class="pt">شركاؤك: ' + esc(state.you.partners.join(" · ")) + "</div>" : "") +
     (state.you.mission ? '<div class="ms"><b>مهمتك السرية · ' + state.you.mission.hard + '</b><span>' + esc(state.you.mission.text) + "</span></div>" : "") +
     "</div></div></div></div>" +
     '<button class="btn dark" data-a="seen">حفظتها — يلا نبدأ</button>';
@@ -1559,7 +1559,7 @@ function nightScreen() {
   var multi = step === "doctor" ? state.doctorHeals : 1;
   return '<p class="eb">دورك دلوقتي</p><h1 class="t" style="color:' + meta.color + '">' + title + "</h1>" +
     '<p class="d" style="margin-bottom:12px">' + (multi > 1 ? "اختار " + ar(multi) + " تعالجهم" : "اختار واحد.") +
-    (step === "thieves" && state.you.partners.length ? "  ·  معاك " + esc(state.you.partners.join(" و")) : "") + "</p>" +
+    (step === "thieves" && (state.you.partners || []).length ? "  ·  معاك " + esc(state.you.partners.join(" و")) : "") + "</p>" +
     '<div class="grid" id="nightGrid">' + alive.map(function (p) { return '<button data-a="npick:' + p.id + '" class="pick">' + esc(p.name) + "</button>"; }).join("") + "</div>" +
     '<button class="btn mt" id="nightGo" data-a="nightGo" disabled>خلاص — غمّض</button>';
 }
@@ -1663,7 +1663,20 @@ document.addEventListener("click", function (e) {
 
 var appEl = document.getElementById("app");
 function render() {
-  appEl.innerHTML = view();
+  // لو أي خطأ حصل وقت بناء الشاشة، مننساش نحدّث الشاشة القديمة —
+  // ده بالظبط اللي كان بيسبب "التجمّد": الشاشة الجديدة بتتبني كاملة
+  // في الذاكرة الأول، فلو وقعت في النص، القديمة بتفضل زي ما هي للأبد.
+  // دلوقتي أي خطأ رسم بيوري شاشة بديلة واضحة بدل ما يسيب المستخدم
+  // واقف من غير ما يعرف حصل إيه.
+  try {
+    appEl.innerHTML = view();
+  } catch (e) {
+    if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(
+      new Date().toTimeString().slice(0, 8) + " — !! فشل بناء الشاشة: " + e.message + (e.stack ? " | " + e.stack.split("\n").slice(0, 2).join(" » ") : ""));
+    appEl.innerHTML = '<div class="mid ctr"><div class="errbox">حصل خطأ في عرض الشاشة. دوس الزرار وجرّب تاني.</div>' +
+      '<button class="btn dark" data-a="rerender">جرّب تاني</button></div>' + footer();
+    return;
+  }
   if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
 }
 function bindFlip() {
@@ -1710,6 +1723,7 @@ appEl.addEventListener("click", async function (e) {
   buzz();
 
   if (k === "retry") { conn = "connecting"; render(); boot(); return; }
+  if (k === "rerender") { render(); return; }
   if (k === "create") { doCreate(); return; }
   if (k === "join") { doJoin(); return; }
   if (k === "resume") { doResume(); return; }
@@ -1790,15 +1804,9 @@ window.addEventListener("unhandledrejection", function (e) {
 window.addEventListener("error", function (e) {
   if (e.message) {
     var loc = e.filename ? (" [سطر " + e.lineno + ":" + e.colno + "]") : "";
-    // خطأ معروف وموثّق جوه SDK فايربيز نفسه (خدمة heartbeat الداخلية —
-    // إحصائيات استخدام لجوجل، مالهاش علاقة بلعبتنا). بيبان دايمًا "سطر ١"
-    // بعمود ضخم لأنه جوه مكتبة مضغوطة على سطر واحد. بنسجّله للمتابعة بس
-    // مننبّهش المستخدم بيه لأنه مش بيوقف اللعبة فعليًا.
-    var isFirebaseInternalNoise = e.lineno === 1 && e.colno > 5000;
-    if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(
-      new Date().toTimeString().slice(0, 8) + " — !! خطأ صفحة" + (isFirebaseInternalNoise ? " (داخلي فايربيز، متجاهل)" : "") + ": " + e.message + loc +
-      (e.error && e.error.stack ? " | " + e.error.stack.split("\n").slice(0, 3).join(" » ") : ""));
-    if (!isFirebaseInternalNoise) showToast("خطأ في الصفحة: " + e.message + loc);
+    var stack = e.error && e.error.stack ? " | " + e.error.stack.split("\n").slice(0, 3).join(" » ") : "";
+    if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(new Date().toTimeString().slice(0, 8) + " — !! خطأ صفحة: " + e.message + loc + stack);
+    showToast("خطأ في الصفحة: " + e.message + loc);
   }
 });
 
