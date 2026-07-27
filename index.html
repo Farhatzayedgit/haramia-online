@@ -1203,6 +1203,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
+var BUILD_VERSION = "v14-0727-1301";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1611,9 +1612,12 @@ function uiSheetHTML() {
 /* ---------------------------- لوحة تشخيص ظاهرة ---------------------------- */
 var debugOpen = false;
 function debugToggleHTML() {
-  return '<button id="dbgbtn" style="position:fixed;bottom:10px;left:10px;z-index:150;width:34px;height:34px;' +
+  return '<div style="position:fixed;bottom:10px;left:10px;z-index:150;display:flex;align-items:center;gap:6px">' +
+    '<button id="dbgbtn" style="width:34px;height:34px;' +
     'border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(30,25,55,.9);color:#E9A33C;' +
-    'font-size:15px;cursor:pointer">🔧</button>';
+    'font-size:15px;cursor:pointer">🔧</button>' +
+    '<span style="background:rgba(30,25,55,.9);color:#8B7FBF;font-family:monospace;font-size:9.5px;' +
+    'padding:5px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.1)">' + BUILD_VERSION + '</span></div>';
 }
 function renderDebugPanel() {
   var host = document.getElementById("dbgpanel");
