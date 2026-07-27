@@ -213,10 +213,12 @@ svg{display:block}
 <body>
 <div id="app"></div>
 
-<!-- فايربيز (مجاني، Spark plan) — عشان اللاعبين يتزامنوا لحظيًا -->
-<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js"></script>
+<!-- فايربيز (مجاني، Spark plan) — عشان اللاعبين يتزامنوا لحظيًا.
+     crossorigin="anonymous" مهمة: من غيرها المتصفح بيخفي تفاصيل أي خطأ
+     جاي من الكود ده ويوريك بس "Script error" من غير أي تفاصيل مفيدة. -->
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-auth-compat.js" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js" crossorigin="anonymous"></script>
 
 <script>
 /* كود إعداد مشروع Farhat على فايربيز — مش سري، الحماية من قواعد الأمان مش من إخفائه */
@@ -956,7 +958,12 @@ else global.Engine = EngineExports;
         }
         default: return;
       }
-    } catch (e) { /* أمر غير صالح — بنتجاهله بدل ما نوقّف اللعبة كلها */ return; }
+    } catch (e) {
+      // أمر غير صالح (زي محاولة بدء اللعبة بعدد لاعبين ناقص) — مش بنوقّف اللعبة،
+      // بس لازم اللاعب يعرف حصل إيه بدل ما الحركة تتبلع بصمت.
+      if (this.onError) this.onError(e);
+      return;
+    }
     this.afterChange();
   };
 
@@ -1254,6 +1261,7 @@ function doCreate() {
   localStorage.setItem("haramia-name", myName.trim());
   makeClient(myName.trim());
   client.createRoom();
+  if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
   watchHostHeartbeat(client.code);
   saveSession();
   render();
@@ -1276,6 +1284,7 @@ async function doResume() {
   makeClient(savedSession.name);
   if (savedSession.wasHost) {
     var ok = await client.resumeHost(savedSession.code);
+    if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
     if (!ok) { connError = "مقدرناش نرجّع الأوضة — يمكن قفلت خالص. ابدأ أوضة جديدة."; client = null; clearSession(); render(); return; }
   } else {
     var exists = await client.roomExists(savedSession.code);
