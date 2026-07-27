@@ -845,20 +845,21 @@ else global.Engine = EngineExports;
 
   HostBrain.prototype.broadcast = function () {
     var self = this;
+    var onErr = function (e) { if (self.onError) self.onError(e); };
     this.backend.set("rooms/" + this.code + "/meta", {
       phase: this.state.phase,
       count: this.state.players.length,
       hostOnline: true,
       hostHeartbeat: this.backend.now(),
-    });
+    }).catch(onErr);
     // نسخة كاملة (فيها الأسرار) بترجع للمضيف بس لو قفل التطبيق وفتحه تاني
     this.backend.set("rooms/" + this.code + "/hostBackup", {
       raw: JSON.stringify({ state: this.state, uidToId: this.uidToId, idToUid: this.idToUid, nextId: this.nextId }),
-    });
+    }).catch(onErr);
     this.state.players.forEach(function (p) {
       var uid = self.idToUid[p.id];
       var view = E.viewFor(self.state, p.id);
-      self.backend.set("rooms/" + self.code + "/views/" + uid, view);
+      self.backend.set("rooms/" + self.code + "/views/" + uid, view).catch(onErr);
     });
   };
 
@@ -1097,14 +1098,23 @@ else global.Engine = EngineExports;
   function FirebaseBackend(app) {
     this.db = app.database();
     this.auth = app.auth();
+    this.onError = null; // بيتحدد من التطبيق — أي كتابة تفشل بتنده عليه
   }
+  FirebaseBackend.prototype._reportErr = function (e) { if (this.onError) this.onError(e); };
   FirebaseBackend.prototype.now = function () { return Date.now(); };
   FirebaseBackend.prototype.uid = function () { return this.db.ref().push().key; };
-  FirebaseBackend.prototype.set = function (path, val) { return this.db.ref(path).set(val); };
-  FirebaseBackend.prototype.update = function (path, obj) { return this.db.ref(path).update(obj); };
+  FirebaseBackend.prototype.set = function (path, val) {
+    var self = this;
+    return this.db.ref(path).set(val).catch(function (e) { self._reportErr(e); throw e; });
+  };
+  FirebaseBackend.prototype.update = function (path, obj) {
+    var self = this;
+    return this.db.ref(path).update(obj).catch(function (e) { self._reportErr(e); throw e; });
+  };
   FirebaseBackend.prototype.push = function (path, val) {
+    var self = this;
     var ref = this.db.ref(path).push();
-    ref.set(val);
+    ref.set(val).catch(function (e) { self._reportErr(e); });
     return ref.key;
   };
   FirebaseBackend.prototype.remove = function (path) { return this.db.ref(path).remove(); };
@@ -1195,6 +1205,7 @@ async function boot() {
   try {
     var app0 = firebase.initializeApp(FIREBASE_CONFIG);
     var backend = new window.FirebaseBackend(app0);
+    backend.onError = function (e) { showToast("فشلت عملية مع فايربيز: " + ((e && (e.code || e.message)) || e)); };
     var uid = await backend.signIn();
     window.__backend = backend;
     window.__uid = uid;
@@ -1657,6 +1668,32 @@ appEl.addEventListener("click", async function (e) {
   }
   if (k === "morningNext") { client.send({ t: "morningNext" }); return; }
   if (k === "again") { client.send({ t: "again" }); return; }
+});
+
+/* ---------------------------- شبكة أمان: نفضح أي خطأ صامت ---------------------------- */
+/* أي عملية فايربيز فاشلة (زي كتابة اترفضت من قواعد الأمان) كانت بتختفي بصمت
+ * من غير ما حد يعرف. دلوقتي أي خطأ زي ده هيظهر في توست واضح فوق الشاشة —
+ * ده اللي هيوريني بالظبط إيه اللي بيحصل فعليًا مع فايربيز الحقيقي. */
+var toasts = [];
+function showToast(msg) {
+  var id = Math.random().toString(36).slice(2);
+  toasts.push({ id: id, msg: String(msg).slice(0, 220) });
+  renderToasts();
+  setTimeout(function () { toasts = toasts.filter(function (t) { return t.id !== id; }); renderToasts(); }, 9000);
+}
+function renderToasts() {
+  var host = document.getElementById("toasts");
+  if (!host) { host = document.createElement("div"); host.id = "toasts"; host.style.cssText = "position:fixed;top:8px;left:8px;right:8px;z-index:200;display:flex;flex-direction:column;gap:6px;pointer-events:none"; document.body.appendChild(host); }
+  host.innerHTML = toasts.map(function (t) {
+    return '<div style="background:linear-gradient(180deg,#E85C55,#B93A34);color:#fff;padding:10px 14px;border-radius:12px;font-family:Tajawal,sans-serif;font-size:12.5px;line-height:1.6;box-shadow:0 8px 20px rgba(0,0,0,.4);pointer-events:auto">⚠️ ' + t.msg.replace(/</g, "&lt;") + "</div>";
+  }).join("");
+}
+window.addEventListener("unhandledrejection", function (e) {
+  var m = (e.reason && (e.reason.code || e.reason.message)) || String(e.reason);
+  showToast("خطأ غير متوقع: " + m);
+});
+window.addEventListener("error", function (e) {
+  if (e.message) showToast("خطأ في الصفحة: " + e.message);
 });
 
 render(); // نعرض "بنتوصّل…" فورًا — من غيرها الشاشة كانت تفضل فاضية تمامًا لحد ما فايربيز يرد
