@@ -580,6 +580,7 @@ function closeVote(s) {
     else if (counts[id] === max && max > 0) best.push(id);
   });
   s._counts = counts;
+  s._rawVotes = { ...s.votes }; // نسخة من مين صوّت على مين — قبل ما votes يتصفّر للراوند الجاي
   if (max === 0) { s.nominated = null; s.voteOutcome = "none"; return "none"; }
   if (best.length > 1) { s.nominated = null; s.voteOutcome = "tie"; return "tie"; }
   s.nominated = best[0];
@@ -678,8 +679,9 @@ function resolveMorning(s) {
 
   ev.filter((e) => !e.saved).forEach((e) => s.log.outs.push({ id: e.target, day: s.day, by: e.kind }));
   healed.forEach((id) => s.log.healed.push({ id, day: s.day }));
-  s.log.votes.push({ day: s.day, counts: s._counts || {}, out: s.nominated });
+  s.log.votes.push({ day: s.day, counts: s._counts || {}, out: s.nominated, raw: s._rawVotes || {} });
   delete s._counts;
+  delete s._rawVotes;
 
   s.events = ev;
   s.eventIdx = 0;
@@ -787,6 +789,23 @@ function viewFor(s, playerId) {
       name: (s.players.find((p) => p.role === "traitor") || { name: null }).name,
       text: s.mission.text, hard: s.mission.hard, status: s.missionStatus,
     } : null,
+    // تقرير التصويت الكامل — بيبان بس لما اللعبة تخلص، عشان محدش يستفيد
+    // من معرفة مين صوّت على مين وهو لسه بيلعب.
+    voteHistory: s.phase === "over" ? s.log.votes.map((v) => {
+      const raw = v.raw || {};
+      const nameOf = (id) => id === null || id === undefined ? null : ((findPlayer(s, Number(id)) || {}).name || "؟");
+      const targets = Object.keys(v.counts).filter((k) => v.counts[k] > 0).map(Number);
+      return {
+        day: v.day,
+        outcome: v.out !== null ? "ok" : (targets.length ? "tie" : "none"),
+        outName: nameOf(v.out),
+        tally: targets.map((targetId) => ({
+          name: nameOf(targetId),
+          count: v.counts[targetId],
+          voters: Object.keys(raw).filter((voterId) => Number(raw[voterId]) === targetId).map((voterId) => nameOf(voterId)),
+        })).sort((a, b) => b.count - a.count),
+      };
+    }) : null,
     result: s.result,
     version: s.version,
   };
@@ -939,6 +958,18 @@ else global.Engine = EngineExports;
           s.log = { outs: [], healed: [], votes: [] };
           s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
           s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {};
+          break;
+        }
+        case "restart": {
+          // لعبة تانية سريعة بنفس الأدوار والإعدادات — من غير المرور باللوبي.
+          // المرونة لتغيير الأدوار لسه موجودة عن طريق "again" العادي.
+          if (!isHost || s.phase !== "over") return;
+          s.players.forEach(function (p) { p.role = null; p.alive = true; p.seen = false; });
+          s.day = 0; s.events = []; s.eventIdx = 0; s.result = null;
+          s.log = { outs: [], healed: [], votes: [] };
+          s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
+          s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {};
+          E.startGame(s);
           break;
         }
         case "emoji": {
@@ -1203,7 +1234,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v19-0727-1356";
+var BUILD_VERSION = "v20-0727-1431";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1613,9 +1644,33 @@ function overScreen() {
       '<div class="nm">' + esc(p.name) + "</div>" + badge(m.label, m.color) + "</div>";
   });
   h += "</div>";
-  if (state.you.isHost) h += '<button class="btn mt" data-a="again">لعبة تانية بنفس اللاعبين</button>';
+  h += voteHistoryHTML();
+  if (state.you.isHost) {
+    h += '<div class="row2 mt"><button class="btn" data-a="restart">لعبة تانية سريعة</button>' +
+      '<button class="btn dark" data-a="again">غيّر الأدوار الأول</button></div>';
+  }
   h += '<button class="btn ghost mt" data-a="leave">اخرج</button>';
   return h;
+}
+
+function voteHistoryHTML() {
+  var hist = state.voteHistory;
+  if (!hist || !hist.length) return "";
+  var h = '<div class="card mt"><p class="eb">تقرير التصويت</p>';
+  hist.forEach(function (day) {
+    h += '<div style="margin-bottom:' + (day === hist[hist.length - 1] ? "0" : "14") + 'px">' +
+      '<div style="font-weight:800;font-size:13.5px;color:var(--parch);margin-bottom:6px">اليوم ' + ar(day.day) +
+      (day.outcome === "ok" ? " — طلع " + esc(day.outName) : day.outcome === "tie" ? " — تعادل، محدش طلع" : " — محدش خد صوت") + "</div>";
+    if (!day.tally.length) h += '<p class="d" style="font-size:12.5px">محدش صوّت.</p>';
+    day.tally.forEach(function (t) {
+      h += '<div class="vr' + (t.name === day.outName ? " lead" : "") + '" style="margin-bottom:5px">' +
+        '<div class="nm">' + esc(t.name) + '<span style="display:block;font-size:11px;color:var(--muted);font-weight:500">' +
+        (t.voters.length ? "صوّتوا عليه: " + esc(t.voters.join("، ")) : "") + "</span></div>" +
+        '<div class="c">' + ar(t.count) + "</div></div>";
+    });
+    h += "</div>";
+  });
+  return h + "</div>";
 }
 
 /* ---------------------------- لوح "الأدوار" ---------------------------- */
@@ -1781,6 +1836,7 @@ appEl.addEventListener("click", async function (e) {
   }
   if (k === "morningNext") { client.send({ t: "morningNext" }); return; }
   if (k === "again") { client.send({ t: "again" }); return; }
+  if (k === "restart") { client.send({ t: "restart" }); return; }
 });
 
 /* ---------------------------- شبكة أمان: نفضح أي خطأ صامت ---------------------------- */
