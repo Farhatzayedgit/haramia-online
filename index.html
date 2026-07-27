@@ -210,7 +210,7 @@ svg{display:block}
 .row2{display:flex;gap:9px}
 .row2 .btn{flex:1}
 .lwrap{display:flex;gap:10px;max-width:900px;margin:10px auto;align-items:stretch;padding:0 6px}
-.lside{flex:0 0 175px;background:rgba(20,16,38,.6);border:1px solid rgba(255,255,255,.08);
+.lside{flex:0 0 160px;background:rgba(20,16,38,.6);border:1px solid rgba(255,255,255,.08);
   border-radius:14px;display:flex;flex-direction:column;max-height:min(78vh,640px);overflow:hidden}
 .lmid{flex:1;min-width:0;max-width:400px;margin:0 auto}
 .lside .lhead{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);font-family:var(--body);
@@ -981,6 +981,11 @@ else global.Engine = EngineExports;
           s.cfg = merged;
           break;
         }
+        case "setChatEnabled": {
+          if (!isHost || s.phase !== "lobby") return;
+          s.chatEnabled = !!msg.value;
+          break;
+        }
         case "start": { if (!isHost) return; E.startGame(s); break; }
         case "seen": { E.markSeen(s, id); break; }
         case "next": { if (!isHost || s.phase !== "day") return; E.nextTalkRound(s); break; }
@@ -1299,7 +1304,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v30-0727-2244";
+var BUILD_VERSION = "v31-0727-2257";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1315,7 +1320,6 @@ var connError = "";
 var uiSheet = null;
 var joinCode = "";
 var myName = localStorage.getItem("haramia-name") || "";
-var homeChatEnabled = true; // اختيار المضيف قبل ما يعمل الأوضة
 var savedSession = null;
 try { savedSession = JSON.parse(localStorage.getItem("haramia-session") || "null"); } catch (e) {}
 
@@ -1410,7 +1414,7 @@ function doCreate() {
   if (!myName.trim()) return;
   localStorage.setItem("haramia-name", myName.trim());
   makeClient(myName.trim());
-  client.createRoom(homeChatEnabled);
+  client.createRoom(true);
   if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
   watchHostHeartbeat(client.code);
   saveSession();
@@ -1531,9 +1535,6 @@ function homeScreen() {
 
   h += '<div class="stack">' +
     '<input class="input" placeholder="اسمك" maxlength="14" value="' + esc(myName) + '" data-bind="name">' +
-    '<div class="sw" data-a="toggleHomeChatEnabled"><div class="swl">' +
-    '<span style="display:flex">💬</span><div><div class="swt">الشات في الأوضة</div><div class="sws">لو عايز تسمح برسايل بين اللاعبين</div></div></div>' +
-    '<div class="knob' + (homeChatEnabled ? " on" : "") + '"><i></i></div></div>' +
     '<button class="btn" data-a="create">اعمل أوضة جديدة</button>' +
     '<div style="display:flex;gap:8px">' +
     '<input class="input" style="flex:1;text-align:center;letter-spacing:6px;font-family:var(--disp);font-size:22px" placeholder="الكود" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
@@ -1575,6 +1576,9 @@ function lobbyScreen() {
       toggleRow("traitor", cfg.traitor, "الخاين", "بياخد مهمة سرية") +
       toggleRow("thief", cfg.nightKill, "الحرامية بيضربوا بالليل", "لو مقفول، بيكسبوا بالتصويت بس", "nightKill") +
       "</div>";
+    h += '<div class="card"><div class="sw" data-a="toggleRoomChat"><div class="swl">' +
+      '<span style="display:flex">💬</span><div><div class="swt">الشات في الأوضة</div><div class="sws">تسمح برسايل نصية بين اللاعبين</div></div></div>' +
+      '<div class="knob' + (state.chatEnabled ? " on" : "") + '"><i></i></div></div></div>';
     h += '<div class="soft"><div class="badges">' + badge(ar(cfg.thieves) + " حرامية", ROLES.thief.color) +
       (cfg.doctor ? badge("دكتور", ROLES.doctor.color) : "") + (cfg.cop ? badge("ضابط", ROLES.cop.color) : "") +
       (cfg.traitor ? badge("خاين", ROLES.traitor.color) : "") +
@@ -2054,7 +2058,6 @@ appEl.addEventListener("click", async function (e) {
   if (k === "resume") { doResume(); return; }
   if (k === "leave") { doLeave(); return; }
   if (k === "about") { uiSheet = { t: "about" }; render(); return; }
-  if (k === "toggleHomeChatEnabled") { homeChatEnabled = !homeChatEnabled; render(); return; }
 
   if (!client) return;
 
@@ -2070,6 +2073,7 @@ appEl.addEventListener("click", async function (e) {
     client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, patch) });
     return;
   }
+  if (k === "toggleRoomChat") { client.send({ t: "setChatEnabled", value: !state.chatEnabled }); return; }
   if (k === "start") { client.send({ t: "start" }); return; }
   if (k === "seen") { client.send({ t: "seen" }); return; }
   if (k === "next") { client.send({ t: "next" }); return; }
