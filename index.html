@@ -394,6 +394,9 @@ function makeCode(taken = {}) {
 }
 
 const alivePlayers = (s) => s.players.filter((p) => p.alive);
+/** زي alivePlayers بس بيستبعد الخاين بعد ما يتكشف — مالوش حق يصوّت ولا
+ *  يُصوَّت عليه، بس بيفضل يشارك في الكلام عادي زي أهل القرية. */
+const votingEligible = (s) => alivePlayers(s).filter((p) => !(s.missionShown && p.role === "traitor"));
 const findPlayer = (s, id) => s.players.find((p) => p.id === id) || null;
 const roleOf = (s, id) => { const p = findPlayer(s, id); return p ? p.role : null; };
 const thievesAlive = (s) => alivePlayers(s).filter((p) => p.role === "thief");
@@ -457,6 +460,7 @@ function createRoom(code, hostId) {
     mission: null,
     missionStatus: "wait",
     missionShown: false,
+    chat: [],
     result: null,
     deadline: null,
     version: 0,
@@ -556,18 +560,20 @@ function castVote(s, voterId, targetId) {
   if (s.phase !== "vote") throw new Error("مش وقت تصويت دلوقتي.");
   const v = findPlayer(s, voterId);
   if (!v || !v.alive) throw new Error("اللي طلع برّا مبيصوّتش.");
+  if (s.missionShown && v.role === "traitor") throw new Error("الخاين اتكشف، مبقاش ليه حق التصويت.");
   if (targetId !== null) {
     const t = findPlayer(s, targetId);
     if (!t || !t.alive) throw new Error("اللاعب ده مش في الدور.");
+    if (s.missionShown && t.role === "traitor") throw new Error("محدش يقدر يصوّت على الخاين بعد ما اتكشف.");
   }
   s.votes[voterId] = targetId;
-  const everyone = alivePlayers(s).every((p) => p.id in s.votes);
+  const everyone = votingEligible(s).every((p) => p.id in s.votes);
   return { state: s, complete: everyone };
 }
 
 function voteCounts(s) {
   const counts = {};
-  alivePlayers(s).forEach((p) => (counts[p.id] = 0));
+  votingEligible(s).forEach((p) => (counts[p.id] = 0));
   Object.values(s.votes).forEach((t) => { if (t !== null && t in counts) counts[t] += 1; });
   return counts;
 }
@@ -732,7 +738,7 @@ function proceed(s) {
  */
 function viewFor(s, playerId) {
   const me = findPlayer(s, playerId);
-  const revealed = (p) => !p.alive || s.phase === "over";
+  const revealed = (p) => !p.alive || s.phase === "over" || (s.missionShown && p.role === "traitor");
   const iAmThief = me && me.role === "thief";
 
   const players = s.players.map((p) => ({
@@ -759,13 +765,15 @@ function viewFor(s, playerId) {
     phase: s.phase,
     cfg: s.cfg,
     cfgTouched: !!s.cfgTouched,
+    missionShown: !!s.missionShown,
+    chat: s.chat || [],
     day: s.day,
     talkRound: s.talkRound,
     talkRounds: s.cfg.talkRounds,
     deadline: s.deadline,
     players,
     you: me ? {
-      id: me.id, name: me.name, alive: me.alive, isHost: me.id === s.hostId,
+      id: me.id, name: me.name, alive: me.alive, isHost: me.id === s.hostId, seen: me.seen,
       role: me.role,
       partners: me.role === "thief" ? s.players.filter((p) => p.role === "thief" && p.id !== me.id).map((p) => p.name) : [],
       mission: me.role === "traitor" ? s.mission : null,
@@ -984,6 +992,15 @@ else global.Engine = EngineExports;
           s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
           s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {};
           E.startGame(s);
+          break;
+        }
+        case "chat": {
+          var p4c = E.findPlayer(s, id); if (!p4c) return;
+          var text = String(msg.text || "").trim().slice(0, 300);
+          if (!text) return;
+          s.chat = s.chat || [];
+          s.chat.push({ from: id, name: p4c.name, text: text, t: this.backend.now() });
+          if (s.chat.length > 200) s.chat = s.chat.slice(-200);
           break;
         }
         case "emoji": {
@@ -1248,7 +1265,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v21-0727-1451";
+var BUILD_VERSION = "v26-0727-2153";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1541,8 +1558,15 @@ function toggleRow(role, on, title, sub, key) {
 
 function revealScreen() {
   if (state.you.seen) {
-    return '<div class="mid"><div class="ctr fade">' + ctrEmblem("villager", 60, "var(--saffron)") +
+    var h = '<div class="mid" style="padding-top:10px"><div class="ctr fade">' + ctrEmblem("villager", 52, "var(--saffron)") +
       '<h1 class="t mt">شفت كارتك</h1><p class="d">مستنيين ' + ar(state.players.filter(function (p) { return !p.seen; }).length) + " لسه.</p></div></div>";
+    h += '<div class="card mt"><p class="eb">مين خلص ومين لسه</p><div class="plist">';
+    state.players.forEach(function (p) {
+      h += '<div class="prow"><div class="dotc' + (p.seen ? "" : " off") + '"></div>' +
+        '<div class="nm">' + esc(p.name) + "</div>" +
+        '<div class="tg">' + (p.seen ? "جاهز" : "لسه بيشوف") + "</div></div>";
+    });
+    return h + "</div></div>";
   }
   var role = state.you.role, meta = ROLES[role] || ROLES.villager;
   var desc = role === "doctor" ? "كل ليلة بتنقذ " + (state.doctorHeals === 2 ? "اتنين" : "واحد") + " — من غير ما تعرف مين اتضرب." : ROLE_DESC[role];
@@ -1578,16 +1602,21 @@ function dayScreen() {
 
 function voteScreen() {
   var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : null;
-  var alive = state.players.filter(function (p) { return p.alive; });
+  var alive = state.players.filter(function (p) { return p.alive && !(state.missionShown && p.role === "traitor"); });
+  var iAmRevealedTraitor = state.missionShown && state.you.role === "traitor";
+  var canVote = state.you.alive && !iAmRevealedTraitor;
   var myVote = state.you.myVote;
-  var h = '<p class="eb">التصويت · باقي ' + mmss(left || 0) + '</p><h1 class="t">' + (state.you.alive ? "على مين شاكك؟" : "أنت برّا الدور") + "</h1>" +
-    '<p class="d" style="margin-bottom:12px">' + (state.you.alive ? "اختيارك سري لحد ما الكل يخلص." : "اتفرّج بس.") + "</p><div class=\"grid\">";
+  var h = '<p class="eb">التصويت · باقي ' + mmss(left || 0) + '</p><h1 class="t">' +
+    (iAmRevealedTraitor ? "اتكشفت كخاين" : state.you.alive ? "على مين شاكك؟" : "أنت برّا الدور") + "</h1>" +
+    '<p class="d" style="margin-bottom:12px">' +
+    (iAmRevealedTraitor ? "بعد ما اتكشفت، مبقاش ليك حق التصويت — بس شارك في الكلام وساعد أهل القرية عادي." :
+      state.you.alive ? "اختيارك سري لحد ما الكل يخلص." : "اتفرّج بس.") + "</p><div class=\"grid\">";
   alive.filter(function (p) { return p.id !== state.you.id; }).forEach(function (p) {
-    h += '<button data-a="vote:' + p.id + '" class="pick' + (myVote === p.id ? " sel" : "") + '"' + (!state.you.alive ? " disabled" : "") + ">" +
+    h += '<button data-a="vote:' + p.id + '" class="pick' + (myVote === p.id ? " sel" : "") + '"' + (!canVote ? " disabled" : "") + ">" +
       esc(p.name) + (p.voted ? '<div class="pickVoted">صوّت</div>' : "") + "</button>";
   });
   h += "</div>";
-  if (state.you.alive) h += '<button class="btn ghost mt" data-a="vote:null">' + (myVote === null ? "✓ ممتنع" : "أمتنع عن التصويت") + "</button>";
+  if (canVote) h += '<button class="btn ghost mt" data-a="vote:null">' + (myVote === null ? "✓ ممتنع" : "أمتنع عن التصويت") + "</button>";
   if (state.you.isHost) h += '<button class="btn dark mt" data-a="forceVote">اقفل التصويت دلوقتي</button>';
   return h;
 }
@@ -1732,6 +1761,79 @@ function uiSheetHTML() {
 
 /* ---------------------------- الأحداث ---------------------------- */
 /* ---------------------------- لوحة تشخيص ظاهرة ---------------------------- */
+/* ---------------------------- شات نصي بسيط ---------------------------- */
+var chatOpen = false;
+var chatSeenCount = 0; // آخر عدد رسائل شافه المستخدم — عشان نعرف نعرض نقطة "جديد"
+function chatToggleHTML() {
+  var unread = state && state.chat ? state.chat.length - chatSeenCount : 0;
+  return '<button id="chatbtn" style="position:fixed;bottom:56px;right:10px;z-index:150;width:40px;height:40px;' +
+    'border-radius:50%;border:1px solid rgba(233,163,60,.35);background:rgba(50,40,20,.92);' +
+    'display:flex;align-items:center;justify-content:center;font-size:17px;cursor:pointer;' +
+    'box-shadow:0 3px 10px rgba(0,0,0,.35)">💬' +
+    (unread > 0 ? '<span style="position:absolute;top:-3px;left:-3px;background:var(--madder);color:#fff;' +
+      'font-family:var(--body);font-size:9.5px;font-weight:800;border-radius:50%;width:16px;height:16px;' +
+      'display:flex;align-items:center;justify-content:center">' + Math.min(unread, 9) + '</span>' : '') +
+    '</button>';
+}
+function renderChatPanel() {
+  var host = document.getElementById("chatpanel");
+  if (!chatOpen) { if (host) host.remove(); return; }
+  var msgs = (state && state.chat) || [];
+  var wasFocused = false, prevValue = "";
+  var oldInput = document.getElementById("chatinput");
+  if (oldInput) { wasFocused = document.activeElement === oldInput; prevValue = oldInput.value; }
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "chatpanel";
+    host.style.cssText = "position:fixed;bottom:100px;right:10px;left:10px;max-width:380px;margin:0 auto;" +
+      "max-height:52vh;background:rgba(20,16,38,.97);border:1px solid rgba(233,163,60,.25);border-radius:16px;" +
+      "z-index:150;display:flex;flex-direction:column;box-shadow:0 12px 30px rgba(0,0,0,.5);overflow:hidden";
+    document.body.appendChild(host);
+  }
+  var myId = state && state.you ? state.you.id : null;
+  var list = msgs.map(function (m) {
+    var mine = m.from === myId;
+    return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? "flex-end" : "flex-start") + ';margin-bottom:8px">' +
+      '<span style="font-size:10.5px;color:var(--muted);margin-bottom:2px">' + esc(m.name) + '</span>' +
+      '<span style="background:' + (mine ? "linear-gradient(180deg,#3A2F63,#2A2350)" : "linear-gradient(180deg,#262046,#1E1938)") +
+      ';color:var(--parch);padding:8px 12px;border-radius:13px;font-size:13.5px;max-width:80%;word-break:break-word">' +
+      esc(m.text) + "</span></div>";
+  }).join("");
+  host.innerHTML = '<div style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);' +
+    'display:flex;justify-content:space-between;align-items:center">' +
+    '<b style="font-size:13px;color:var(--saffron)">الشات</b>' +
+    '<button id="chatclose" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">✕</button></div>' +
+    '<div id="chatlist" style="flex:1;overflow-y:auto;padding:12px">' + (list || '<p class="d" style="text-align:center">لسه مفيش رسايل…</p>') + '</div>' +
+    '<div style="display:flex;gap:7px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">' +
+    '<input id="chatinput" class="input" style="flex:1;margin:0" placeholder="اكتب رسالة…" maxlength="300">' +
+    '<button id="chatsend" class="btn" style="width:auto;padding:0 16px;margin:0">ابعت</button></div>';
+  var listEl = document.getElementById("chatlist");
+  listEl.scrollTop = listEl.scrollHeight;
+  var newInput = document.getElementById("chatinput");
+  if (newInput && prevValue) newInput.value = prevValue;
+  if (newInput && wasFocused) newInput.focus();
+  chatSeenCount = msgs.length;
+}
+function sendChat() {
+  var inp = document.getElementById("chatinput");
+  if (!inp || !inp.value.trim() || !client) return;
+  var text = inp.value.trim();
+  inp.value = ""; // نمسحها قبل الإرسال — لو الرد رجع فورًا ومسك رسم جديد، هيلاقيها فاضية أصلًا
+  client.send({ t: "chat", text: text });
+}
+document.addEventListener("click", function (e) {
+  if (e.target && e.target.id === "chatbtn") { chatOpen = !chatOpen; renderChatPanel(); renderChatToggle(); return; }
+  if (e.target && e.target.id === "chatclose") { chatOpen = false; renderChatPanel(); renderChatToggle(); return; }
+  if (e.target && e.target.id === "chatsend") { sendChat(); return; }
+});
+document.addEventListener("keydown", function (e) {
+  if (e.target && e.target.id === "chatinput" && e.key === "Enter") { sendChat(); }
+});
+function renderChatToggle() {
+  var host = document.getElementById("chattogglehost");
+  if (host) host.innerHTML = chatToggleHTML();
+}
+
 var debugOpen = false;
 function debugToggleHTML() {
   return '<div style="position:fixed;bottom:10px;left:10px;z-index:150;display:flex;align-items:center;gap:6px">' +
@@ -1777,7 +1879,11 @@ function render() {
       '<button class="btn dark" data-a="rerender">جرّب تاني</button></div>' + footer();
     return;
   }
-  if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
+  try {
+    if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
+    renderChatPanel();
+    renderChatToggle();
+  } catch (e) { /* الصفحة يمكن اتقفلت أو في تحديث متأخر وصل بعدها — نتجاهله بأمان */ }
 }
 function bindFlip() {
   var f = document.getElementById("flip"); if (!f) return;
@@ -1927,6 +2033,11 @@ window.addEventListener("error", function (e) {
     "box-shadow:0 3px 10px rgba(0,0,0,.35)";
   v.textContent = "🎙️";
   document.body.appendChild(v);
+
+  var chatHost = document.createElement("div");
+  chatHost.id = "chattogglehost";
+  chatHost.innerHTML = chatToggleHTML();
+  document.body.appendChild(chatHost);
 })();
 
 render(); // نعرض "بنتوصّل…" فورًا — من غيرها الشاشة كانت تفضل فاضية تمامًا لحد ما فايربيز يرد
