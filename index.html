@@ -1203,7 +1203,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v14-0727-1301";
+var BUILD_VERSION = "v15-0727-1308";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1230,8 +1230,30 @@ function saveSession() {
 function clearSession() { localStorage.removeItem("haramia-session"); savedSession = null; }
 
 /* ---------------------------- الإقلاع ---------------------------- */
+/** بتمسح قاعدة بيانات heartbeat الداخلية بتاعة فايربيز لو كانت موجودة أو
+ *  تالفة — باج معروف موثّق في SDK فايربيز نفسه. عملية آمنة تمامًا: مفيش
+ *  فيها أي بيانات بتاعة اللعبة، هي بس إحصائيات استخدام داخلية لفايربيز. */
+function wipeHeartbeatDB() {
+  return new Promise(function (resolve) {
+    try {
+      if (!window.indexedDB || !indexedDB.deleteDatabase) return resolve();
+      var req = indexedDB.deleteDatabase("firebase-heartbeat-database");
+      req.onsuccess = function () { resolve(); };
+      req.onerror = function () { resolve(); };
+      req.onblocked = function () { resolve(); };
+      setTimeout(resolve, 1500); // حماية لو الحدث اتأخر لأي سبب
+    } catch (e) { resolve(); }
+  });
+}
+
 async function boot() {
   try {
+    // باج معروف وموثّق في SDK فايربيز نفسه (firebase/firebase-js-sdk#7736):
+    // خدمة داخلية اسمها heartbeatService بتخزّن بيانات في IndexedDB، ولو
+    // البيانات دي بقت تالفة (بيحصل مع الوقت في بعض المتصفحات) بتوقّع
+    // بالظبط بالخطأ "Cannot read properties of undefined (reading 'length')".
+    // بنمسحها هنا استباقيًا قبل ما فايربيز يشتغل، عشان محدش يتأثر بيها.
+    await wipeHeartbeatDB();
     var app0 = firebase.initializeApp(FIREBASE_CONFIG);
     var backend = new window.FirebaseBackend(app0);
     backend.onError = function (e) { showToast("فشلت عملية مع فايربيز: " + ((e && (e.code || e.message)) || e)); };
