@@ -213,10 +213,13 @@ svg{display:block}
 <body>
 <div id="app"></div>
 
+<!-- فايربيز — SDK الرسمي المجرّب من ملايين التطبيقات (مش كود مخصّص) -->
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-auth-compat.js" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js" crossorigin="anonymous"></script>
+
 <script>
-/* كود إعداد مشروع Farhat على فايربيز — مش سري، الحماية من قواعد الأمان مش من إخفائه.
- * ملحوظة: مفيش سكريبت CDN هنا خالص — بنكلّم فايربيز مباشرة عن طريق REST
- * (شوف backend-firebase.js) عشان أي خطأ يبان كامل وواضح. */
+/* كود إعداد مشروع Farhat على فايربيز — مش سري، الحماية من قواعد الأمان مش من إخفائه */
 var FIREBASE_CONFIG = {
   "apiKey": "AIzaSyCj8_3j0Bf6yobxXns3bN80k3iJvzLdhp8",
   "authDomain": "haramia-game.firebaseapp.com",
@@ -1089,20 +1092,15 @@ else global.Engine = EngineExports;
 </script>
 <script>
 /*
- * حرامية وأهل القرية — الاتصال بفايربيز عن طريق REST مباشرة
+ * حرامية وأهل القرية — الاتصال بفايربيز
  * © 2026 فرحات زايد — كل الحقوق محفوظة.
  *
- * الملف ده بيكلّم فايربيز عن طريق الإنترنت مباشرة (REST API) من غير ما
- * يحمّل أي سكريبت جاهز من CDN خارجي. السبب: المتصفحات بتخفي تفاصيل أي
- * خطأ جاي من كود مصدره خارجي كإجراء أمان — فكنا بنشوف "Script error"
- * بس من غير أي تفاصيل مفيدة. دلوقتي كل حاجة بتحصل بكود من نفس الصفحة،
- * فأي خطأ هيبان كامل وواضح.
+ * بيستخدم SDK فايربيز الرسمي (نفس اللي ملايين التطبيقات بتستخدمه) —
+ * ده أضمن بكتير من أي كود مخصّص، لأنه مجرّب ومُختبَر على مستوى العالم.
  */
 (function (global) {
   "use strict";
 
-  /* سجل تشخيص ظاهر على الشاشة — بيسجّل كل خطوة شبكة بتحصل فعليًا،
-   * عشان لو حاجة اتعلّقت من غير أي خطأ، نقدر نشوف فين بالظبط وقفت. */
   var LOG = [];
   function log(msg) {
     var t = new Date().toTimeString().slice(0, 8);
@@ -1112,246 +1110,84 @@ else global.Engine = EngineExports;
   }
   global.__firebaseDebugLog = LOG;
 
-  /* ------------------------------ أدوات مسار عامة ------------------------------ */
-  function getAt(obj, path) {
-    var parts = path.split("/").filter(Boolean), cur = obj;
-    for (var i = 0; i < parts.length; i++) { if (cur == null) return null; cur = cur[parts[i]]; }
-    return cur === undefined ? null : cur;
-  }
-  function setAt(obj, path, val) {
-    var parts = path.split("/").filter(Boolean);
-    if (!parts.length) return val;
-    obj = obj && typeof obj === "object" ? Object.assign(Array.isArray(obj) ? [] : {}, obj) : {};
-    var cur = obj;
-    for (var i = 0; i < parts.length - 1; i++) {
-      var k = parts[i];
-      cur[k] = cur[k] && typeof cur[k] === "object" ? Object.assign({}, cur[k]) : {};
-      cur = cur[k];
-    }
-    var lastKey = parts[parts.length - 1];
-    if (val === null) delete cur[lastKey]; else cur[lastKey] = val;
-    return obj;
-  }
-  function genKey() {
-    var A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    var t = Date.now().toString(36), r = "";
-    for (var i = 0; i < 12; i++) r += A[Math.floor(Math.random() * A.length)];
-    return "k" + t + r;
-  }
-
-  /** بيقرا استريم SSE عن طريق fetch عادي — مفيش اعتماد على EventSource. */
-  function streamSSE(url, handlers, tag) {
-    var ctrl = new AbortController();
-    var closed = false;
-    log("SSE: بنفتح اتصال (" + (tag || url) + ")");
-    fetch(url, { headers: { Accept: "text/event-stream" }, signal: ctrl.signal })
-      .then(function (res) {
-        log("SSE: وصل رد أولي (" + (tag || "") + ") status=" + res.status);
-        if (!res.ok) {
-          return res.text().then(function (t) { throw new Error("HTTP " + res.status + ": " + t); });
-        }
-        var reader = res.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = "";
-        function pump() {
-          if (closed) return;
-          return reader.read().then(function (r) {
-            if (r.done || closed) return;
-            buffer += decoder.decode(r.value, { stream: true });
-            var chunks = buffer.split("\n\n");
-            buffer = chunks.pop();
-            chunks.forEach(function (chunk) {
-              var evt = "message", data = "";
-              chunk.split("\n").forEach(function (line) {
-                if (line.indexOf("event:") === 0) evt = line.slice(6).trim();
-                else if (line.indexOf("data:") === 0) data += line.slice(5).trim();
-              });
-              log("SSE (" + (tag || "") + "): جالي حدث '" + evt + "'" + (data ? " — " + data.slice(0, 90) : ""));
-              if (handlers[evt]) {
-                try { handlers[evt](JSON.parse(data)); }
-                catch (e) { log("SSE (" + (tag || "") + "): !! فشل تفسير الحدث: " + e.message); }
-              }
-            });
-            return pump();
-          });
-        }
-        return pump();
-      })
-      .catch(function (e) { log("SSE (" + (tag || "") + "): !! الاتصال فشل: " + e.message); if (!closed && handlers.error) handlers.error(e); });
-    return function () { closed = true; ctrl.abort(); log("SSE (" + (tag || "") + "): اتقفل"); };
-  }
-
-  function FirebaseBackend(config) {
-    this.cfg = config;
-    this.idToken = null;
-    this.uid = null;
+  function FirebaseBackend(app) {
+    this.db = app.database();
+    this.auth = app.auth();
     this.onError = null;
-    this._pingTimers = [];
   }
-  FirebaseBackend.prototype._reportErr = function (e) { if (this.onError) this.onError(e); };
-  FirebaseBackend.prototype.now = function () { return Date.now(); };
-  FirebaseBackend.prototype._url = function (path, qs) {
-    var u = this.cfg.databaseURL + "/" + path + ".json?auth=" + encodeURIComponent(this.idToken);
-    return qs ? u + "&" + qs : u;
+  FirebaseBackend.prototype._reportErr = function (e) {
+    log("!! خطأ: " + ((e && (e.code || e.message)) || e));
+    if (this.onError) this.onError(e);
   };
+  FirebaseBackend.prototype.now = function () { return Date.now(); };
+  FirebaseBackend.prototype.uid = function () { return this.db.ref().push().key; };
 
-  function withTimeout(promise, ms, label) {
-    var t;
-    var timeout = new Promise(function (_, reject) {
-      t = setTimeout(function () { reject(new Error("timeout: " + label + " ماردّش خلال " + Math.round(ms / 1000) + " ثانية")); }, ms);
-    });
-    return Promise.race([promise, timeout]).finally(function () { clearTimeout(t); });
-  }
+  FirebaseBackend.prototype.set = function (path, val) {
+    var self = this;
+    log("كتابة: " + path);
+    return this.db.ref(path).set(val).then(function () { log("كتابة نجحت: " + path); }).catch(function (e) { self._reportErr(e); throw e; });
+  };
+  FirebaseBackend.prototype.update = function (path, obj) {
+    var self = this;
+    return this.db.ref(path).update(obj).catch(function (e) { self._reportErr(e); throw e; });
+  };
+  FirebaseBackend.prototype.push = function (path, val) {
+    var self = this;
+    var ref = this.db.ref(path).push();
+    log("دفع (push): " + path + "/" + ref.key + " — نوع الرسالة: " + (val && val.msg && val.msg.t || "?"));
+    ref.set(val).then(function () { log("دفع نجح: " + ref.key); }).catch(function (e) { self._reportErr(e); });
+    return ref.key;
+  };
+  FirebaseBackend.prototype.remove = function (path) { return this.db.ref(path).remove(); };
 
-  /** بيدخل بحساب مجهول عن طريق REST مباشرة — مجاني، ومفيش إيميل أو باسورد.
-   *  بيحتفظ بالجلسة في localStorage عشان يرجع لنفس الـuid لو الصفحة اتقفلت وفتحت تاني.
+  FirebaseBackend.prototype.onValue = function (path, cb) {
+    var self = this;
+    var ref = this.db.ref(path);
+    var handler = function (snap) {
+      var v = snap.val();
+      log("قراءة (" + path.split("/").pop() + "): " + (v ? "وصلت بيانات" : "فاضي"));
+      cb(v);
+    };
+    ref.on("value", handler, function (err) { self._reportErr(err); });
+    return function () { ref.off("value", handler); };
+  };
+  FirebaseBackend.prototype.onChildAdded = function (path, cb) {
+    var self = this;
+    var ref = this.db.ref(path);
+    var handler = function (snap) { cb(snap.key, snap.val()); };
+    ref.on("child_added", handler, function (err) { self._reportErr(err); });
+    return function () { ref.off("child_added", handler); };
+  };
+  FirebaseBackend.prototype.readOnce = function (path) {
+    return this.db.ref(path).once("value").then(function (snap) { return snap.val(); });
+  };
+  FirebaseBackend.prototype.setTimer = function (fn, ms) { return setTimeout(fn, ms); };
+  FirebaseBackend.prototype.clearTimer = function (id) { clearTimeout(id); };
+
+  /** بيدخل بحساب مجهول — مجاني، ومفيش إيميل أو باسورد.
    *  محدود بمهلة ١٢ ثانية — من غيرها لو النت اتعلّق، التطبيق كان هيفضل معلّق للأبد. */
   FirebaseBackend.prototype.signIn = function () {
     var self = this;
     log("بندخل بحساب مجهول…");
-    return withTimeout(this._signInInner(), 12000, "الاتصال بفايربيز").then(function (uid) {
-      log("دخلنا بنجاح — uid=" + uid);
-      return uid;
-    }, function (e) {
-      log("!! فشل تسجيل الدخول: " + e.message);
-      throw e;
-    });
-  };
-  FirebaseBackend.prototype._signInInner = function () {
-    var self = this;
-    var saved = null;
-    try { saved = JSON.parse(localStorage.getItem("haramia-auth") || "null"); } catch (e) {}
-    var isRefresh = saved && saved.refreshToken;
-    if (isRefresh) {
-      var url = "https://securetoken.googleapis.com/v1/token?key=" + encodeURIComponent(this.cfg.apiKey);
-      var body = "grant_type=refresh_token&refresh_token=" + encodeURIComponent(saved.refreshToken);
-      return fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body })
-        .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
-        .then(function (o) {
-          if (!o.r.ok) throw new Error("auth/refresh-failed: " + JSON.stringify(o.d.error || o.d));
-          self.idToken = o.d.id_token; self.uid = o.d.user_id;
-          self._saveAuth({ idToken: o.d.id_token, refreshToken: o.d.refresh_token, uid: o.d.user_id });
-          self._scheduleRefresh();
-          return self.uid;
-        })
-        .catch(function () { return self._freshSignIn(); }); // لو الريفريش فشل، ندخل من جديد
-    }
-    return self._freshSignIn();
-  };
-  FirebaseBackend.prototype._freshSignIn = function () {
-    var self = this;
-    var url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + encodeURIComponent(this.cfg.apiKey);
-    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ returnSecureToken: true }) })
-      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
-      .then(function (o) {
-        if (!o.r.ok) throw new Error("auth/" + ((o.d.error && o.d.error.message) || "sign-in-failed") + ": " + JSON.stringify(o.d.error || o.d));
-        self.idToken = o.d.idToken; self.uid = o.d.localId;
-        self._saveAuth({ idToken: o.d.idToken, refreshToken: o.d.refreshToken, uid: o.d.localId });
-        self._scheduleRefresh();
-        return self.uid;
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return; done = true;
+        reject(new Error("timeout: الاتصال بفايربيز ماردّش خلال ١٢ ثانية"));
+      }, 12000);
+      self.auth.onAuthStateChanged(function (user) {
+        if (done || !user) return;
+        done = true; clearTimeout(timer);
+        log("دخلنا بنجاح — uid=" + user.uid);
+        resolve(user.uid);
       });
-  };
-  FirebaseBackend.prototype._saveAuth = function (a) { try { localStorage.setItem("haramia-auth", JSON.stringify(a)); } catch (e) {} };
-  FirebaseBackend.prototype._scheduleRefresh = function () {
-    var self = this;
-    var t = setTimeout(function () { self.signIn(); }, 50 * 60 * 1000); // فايربيز بيخلّي التوكن ساعة — نجدده كل ٥٠ دقيقة
-    this._pingTimers.push(t);
-  };
-
-  /* ------------------------------ قراءة وكتابة ------------------------------ */
-  FirebaseBackend.prototype.set = function (path, val) {
-    var self = this;
-    log("كتابة: " + path);
-    return fetch(this._url(path), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(val) })
-      .then(function (r) {
-        if (r.ok) { log("كتابة نجحت: " + path); return; }
-        return r.text().then(function (t) { log("!! كتابة فشلت: " + path + " — " + t); var e = new Error("firebase/write-failed: " + t); self._reportErr(e); throw e; });
-      })
-      .catch(function (e) { log("!! كتابة رمت استثناء: " + path + " — " + e.message); throw e; });
-  };
-  FirebaseBackend.prototype.update = function (path, obj) {
-    var self = this;
-    return fetch(this._url(path), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) })
-      .then(function (r) {
-        if (r.ok) return;
-        return r.text().then(function (t) { var e = new Error("firebase/write-failed: " + t); self._reportErr(e); throw e; });
+      self.auth.signInAnonymously().catch(function (e) {
+        if (done) return; done = true; clearTimeout(timer);
+        log("!! فشل تسجيل الدخول: " + e.message);
+        reject(e);
       });
-  };
-  FirebaseBackend.prototype.push = function (path, val) {
-    var self = this;
-    var key = genKey();
-    log("دفع (push): " + path + "/" + key + " — نوع الرسالة: " + (val && val.msg && val.msg.t || "?"));
-    this.set(path + "/" + key, val).catch(function (e) { self._reportErr(e); });
-    return key;
-  };
-  FirebaseBackend.prototype.remove = function (path) {
-    var self = this;
-    return fetch(this._url(path), { method: "DELETE" }).then(function (r) {
-      if (r.ok) return;
-      return r.text().then(function (t) { var e = new Error("firebase/write-failed: " + t); self._reportErr(e); throw e; });
     });
   };
-  FirebaseBackend.prototype.readOnce = function (path) {
-    var self = this;
-    return fetch(this._url(path)).then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error("firebase/read-failed: " + t); });
-      return r.json();
-    });
-  };
-
-  /* ------------------------------ متابعة لحظية عن طريق SSE ------------------------------ */
-  FirebaseBackend.prototype.onValue = function (path, cb) {
-    var self = this, current = null, gotFullSnapshot = false;
-    var stop = streamSSE(this._url(path), {
-      put: function (e) {
-        current = e.path === "/" ? e.data : setAt(current, e.path, e.data);
-        if (e.path === "/") gotFullSnapshot = true;
-        cb(current);
-      },
-      patch: function (e) {
-        // patch بتمثّل فرق عن نسخة كاملة سابقة. لو لسه ماوصلناش نسخة كاملة
-        // (put كامل عند الجذر)، تطبيق الفرق ده هيطلّع كائن ناقص وممكن يوقّع
-        // الواجهة — فبنستنى النسخة الكاملة الأول.
-        if (!gotFullSnapshot) {
-          log("SSE: اتجاهل patch قبل ما نوصل نسخة كاملة");
-          return;
-        }
-        if (e.path === "/") { current = Object.assign({}, current, e.data); }
-        else { current = setAt(current, e.path, Object.assign({}, getAt(current, e.path), e.data)); }
-        cb(current);
-      },
-      error: function (err) { self._reportErr(err); },
-    }, "views:" + path.split("/").pop());
-    return stop;
-  };
-  FirebaseBackend.prototype.onChildAdded = function (path, cb) {
-    var self = this, seen = {};
-    function pathData(e) {
-      var parts = e.path.split("/").filter(Boolean);
-      return parts.length === 1 ? e.data : null; // بنهتم بس بالإضافة المباشرة تحت الجذر
-    }
-    var stop = streamSSE(this._url(path), {
-      put: function (e) {
-        if (e.path === "/") {
-          var obj = e.data || {};
-          Object.keys(obj).forEach(function (k) { if (!seen[k]) { seen[k] = true; cb(k, obj[k]); } });
-        } else {
-          var k2 = e.path.split("/").filter(Boolean)[0];
-          if (k2 && !seen[k2]) { seen[k2] = true; cb(k2, pathData(e)); }
-        }
-      },
-      patch: function (e) {
-        if (e.path === "/") {
-          Object.keys(e.data || {}).forEach(function (k) { if (!seen[k]) { seen[k] = true; cb(k, e.data[k]); } });
-        }
-      },
-      error: function (err) { self._reportErr(err); },
-    }, "intents");
-    return stop;
-  };
-
-  FirebaseBackend.prototype.setTimer = function (fn, ms) { return setTimeout(fn, ms); };
-  FirebaseBackend.prototype.clearTimer = function (id) { clearTimeout(id); };
 
   global.FirebaseBackend = FirebaseBackend;
 })(window);
@@ -1395,7 +1231,8 @@ function clearSession() { localStorage.removeItem("haramia-session"); savedSessi
 /* ---------------------------- الإقلاع ---------------------------- */
 async function boot() {
   try {
-    var backend = new window.FirebaseBackend(FIREBASE_CONFIG);
+    var app0 = firebase.initializeApp(FIREBASE_CONFIG);
+    var backend = new window.FirebaseBackend(app0);
     backend.onError = function (e) { showToast("فشلت عملية مع فايربيز: " + ((e && (e.code || e.message)) || e)); };
     var uid = await backend.signIn();
     window.__backend = backend;
