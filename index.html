@@ -209,6 +209,17 @@ svg{display:block}
 .badges{display:flex;flex-wrap:wrap;gap:7px}
 .row2{display:flex;gap:9px}
 .row2 .btn{flex:1}
+.lwrap{display:flex;gap:8px;max-width:900px;margin:0 auto;align-items:flex-start;padding:0 6px}
+.lside{flex:0 0 165px;background:rgba(20,16,38,.55);border:1px solid rgba(255,255,255,.08);
+  border-radius:14px;display:flex;flex-direction:column;height:calc(100vh - 16px);position:sticky;top:8px}
+.lmid{flex:1;min-width:0;max-width:400px;margin:0 auto}
+.lside .lhead{padding:9px 11px;border-bottom:1px solid rgba(255,255,255,.08);font-family:var(--body);
+  font-weight:800;font-size:11.5px;color:var(--saffron);flex:none}
+.lside .lbody{flex:1;overflow-y:auto;padding:9px 10px}
+.lside .lfoot{flex:none;padding:8px;border-top:1px solid rgba(255,255,255,.08)}
+.logrow{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:11px;line-height:1.6;color:var(--parch)}
+.logrow .lday{color:var(--muted);font-size:9.5px;display:block;margin-bottom:2px}
+@media (max-width:620px){ .lside{display:none} }
 
 </style>
 </head>
@@ -767,6 +778,7 @@ function viewFor(s, playerId) {
     cfgTouched: !!s.cfgTouched,
     missionShown: !!s.missionShown,
     chat: s.chat || [],
+    chatEnabled: s.chatEnabled !== false,
     day: s.day,
     talkRound: s.talkRound,
     talkRounds: s.cfg.talkRounds,
@@ -802,6 +814,26 @@ function viewFor(s, playerId) {
     // تقرير التصويت الكامل — بيبان بس لما اللعبة تخلص، عشان محدش يستفيد
     // من معرفة مين صوّت على مين وهو لسه بيلعب.
     voteHistory: s.phase === "over" ? s.log.votes.map((v) => dayTally(s, v.day, v.counts, v.raw, v.out)) : null,
+    // سجل الأحداث كامل من أول يوم — بيبان دايمًا (مش سري)، لأنه نفس المعلومة
+    // اللي بتتعلن كل صباح، بس محفوظة عشان تتقرا تاني بعدين. اللي اتضرب بالليل
+    // ونجا بيفضل مجهول (نفس قاعدة الخصوصية بتاعة شاشة الصباح بالظبط).
+    gameLog: (() => {
+      const nameOf = (id) => id === null || id === undefined ? null : ((findPlayer(s, Number(id)) || {}).name || "؟");
+      const entries = [];
+      for (let d = 1; d <= s.day; d++) {
+        const voteEntry = s.log.votes.find((v) => v.day === d);
+        if (voteEntry) {
+          entries.push({
+            day: d, kind: "vote",
+            name: voteEntry.out !== null ? nameOf(voteEntry.out) : null,
+            outcome: voteEntry.out !== null ? "out" : (Object.values(voteEntry.counts || {}).some((c) => c > 0) ? "tie" : "none"),
+          });
+        }
+        s.log.outs.filter((o) => o.day === d).forEach((o) => entries.push({ day: d, kind: o.by, name: nameOf(o.id) }));
+        if (s.log.healed.some((h) => h.day === d)) entries.push({ day: d, kind: "saved" });
+      }
+      return entries;
+    })(),
     // تقرير اليوم اللي لسه ماتعلنش هويته — بيبان في طور "tally" بس، بعد
     // ما التصويت يقفل وقبل ما نعرف مين طلع بالظبط.
     tallyReport: s.phase === "tally" ? dayTally(s, s.day, s._counts || {}, s._rawVotes || {}, s.nominated) : null,
@@ -855,10 +887,11 @@ else global.Engine = EngineExports;
   "use strict";
   var E = (typeof module !== "undefined" && module.exports) ? require("./engine.js") : global.Engine;
 
-  function HostBrain(backend, code, hostUid, hostName) {
+  function HostBrain(backend, code, hostUid, hostName, chatEnabled) {
     this.backend = backend;
     this.code = code;
     this.state = E.createRoom(code, null);
+    this.state.chatEnabled = chatEnabled !== false; // افتراضيًا مفعّل لو محددش
     this.uidToId = {};      // uid فايربيز -> رقم داخلي (زي ما كان بيحصل في السيرفر)
     this.idToUid = {};
     this.nextId = 0;
@@ -995,6 +1028,7 @@ else global.Engine = EngineExports;
           break;
         }
         case "chat": {
+          if (s.chatEnabled === false) return;
           var p4c = E.findPlayer(s, id); if (!p4c) return;
           var text = String(msg.text || "").trim().slice(0, 300);
           if (!text) return;
@@ -1078,11 +1112,11 @@ else global.Engine = EngineExports;
     this._unsubs = [];
   };
 
-  GameClient.prototype.createRoom = function () {
+  GameClient.prototype.createRoom = function (chatEnabled) {
     this._cleanup();
     var code = makeCode();
     this.code = code; this.isHost = true;
-    this.hostBrain = new HostBrain(this.backend, code, this.uid, this.name);
+    this.hostBrain = new HostBrain(this.backend, code, this.uid, this.name, chatEnabled);
     this._listen();
     this.hostBrain.broadcast();
     return code;
@@ -1265,7 +1299,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v26-0727-2153";
+var BUILD_VERSION = "v29-0727-2215";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1281,6 +1315,7 @@ var connError = "";
 var uiSheet = null;
 var joinCode = "";
 var myName = localStorage.getItem("haramia-name") || "";
+var homeChatEnabled = true; // اختيار المضيف قبل ما يعمل الأوضة
 var savedSession = null;
 try { savedSession = JSON.parse(localStorage.getItem("haramia-session") || "null"); } catch (e) {}
 
@@ -1375,7 +1410,7 @@ function doCreate() {
   if (!myName.trim()) return;
   localStorage.setItem("haramia-name", myName.trim());
   makeClient(myName.trim());
-  client.createRoom();
+  client.createRoom(homeChatEnabled);
   if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
   watchHostHeartbeat(client.code);
   saveSession();
@@ -1414,6 +1449,7 @@ function doLeave() {
   if (client) client.leave();
   if (unsubMeta) { unsubMeta(); unsubMeta = null; }
   client = null; state = null; lastMeta = null; hostStaleShown = false;
+  chatOpen = false;
   clearSession();
   render();
 }
@@ -1495,6 +1531,9 @@ function homeScreen() {
 
   h += '<div class="stack">' +
     '<input class="input" placeholder="اسمك" maxlength="14" value="' + esc(myName) + '" data-bind="name">' +
+    '<div class="sw" data-a="toggleHomeChatEnabled"><div class="swl">' +
+    '<span style="display:flex">💬</span><div><div class="swt">الشات في الأوضة</div><div class="sws">لو عايز تسمح برسايل بين اللاعبين</div></div></div>' +
+    '<div class="knob' + (homeChatEnabled ? " on" : "") + '"><i></i></div></div>' +
     '<button class="btn" data-a="create">اعمل أوضة جديدة</button>' +
     '<div style="display:flex;gap:8px">' +
     '<input class="input" style="flex:1;text-align:center;letter-spacing:6px;font-family:var(--disp);font-size:22px" placeholder="الكود" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
@@ -1764,7 +1803,9 @@ function uiSheetHTML() {
 /* ---------------------------- شات نصي بسيط ---------------------------- */
 var chatOpen = false;
 var chatSeenCount = 0; // آخر عدد رسائل شافه المستخدم — عشان نعرف نعرض نقطة "جديد"
+function chatAvailable() { return !!(client && state && state.chatEnabled); }
 function chatToggleHTML() {
+  if (!chatAvailable()) return "";
   var unread = state && state.chat ? state.chat.length - chatSeenCount : 0;
   return '<button id="chatbtn" style="position:fixed;bottom:56px;right:10px;z-index:150;width:40px;height:40px;' +
     'border-radius:50%;border:1px solid rgba(233,163,60,.35);background:rgba(50,40,20,.92);' +
@@ -1777,7 +1818,7 @@ function chatToggleHTML() {
 }
 function renderChatPanel() {
   var host = document.getElementById("chatpanel");
-  if (!chatOpen) { if (host) host.remove(); return; }
+  if (!chatOpen || !chatAvailable()) { if (host) host.remove(); return; }
   var msgs = (state && state.chat) || [];
   var wasFocused = false, prevValue = "";
   var oldInput = document.getElementById("chatinput");
@@ -1814,8 +1855,8 @@ function renderChatPanel() {
   if (newInput && wasFocused) newInput.focus();
   chatSeenCount = msgs.length;
 }
-function sendChat() {
-  var inp = document.getElementById("chatinput");
+function sendChat(inputId) {
+  var inp = document.getElementById(inputId || "chatinput");
   if (!inp || !inp.value.trim() || !client) return;
   var text = inp.value.trim();
   inp.value = ""; // نمسحها قبل الإرسال — لو الرد رجع فورًا ومسك رسم جديد، هيلاقيها فاضية أصلًا
@@ -1824,10 +1865,13 @@ function sendChat() {
 document.addEventListener("click", function (e) {
   if (e.target && e.target.id === "chatbtn") { chatOpen = !chatOpen; renderChatPanel(); renderChatToggle(); return; }
   if (e.target && e.target.id === "chatclose") { chatOpen = false; renderChatPanel(); renderChatToggle(); return; }
-  if (e.target && e.target.id === "chatsend") { sendChat(); return; }
+  if (e.target && e.target.id === "chatsend") { sendChat("chatinput"); return; }
+  if (e.target && e.target.id === "lchatsend") { sendChat("lchatinput"); return; }
+  if (e.target && e.target.id === "landscapebtn") { toggleLandscape(); return; }
 });
 document.addEventListener("keydown", function (e) {
-  if (e.target && e.target.id === "chatinput" && e.key === "Enter") { sendChat(); }
+  if (e.target && e.target.id === "chatinput" && e.key === "Enter") { sendChat("chatinput"); }
+  if (e.target && e.target.id === "lchatinput" && e.key === "Enter") { sendChat("lchatinput"); }
 });
 function renderChatToggle() {
   var host = document.getElementById("chattogglehost");
@@ -1863,27 +1907,87 @@ document.addEventListener("click", function (e) {
   if (e.target && e.target.id === "dbgbtn") { debugOpen = !debugOpen; renderDebugPanel(); }
 });
 
+/* ---------------------------- وضع العرض العريض (بالثلاث أعمدة) ---------------------------- */
+var landscapeMode = localStorage.getItem("haramia-landscape") === "1";
+function toggleLandscape() {
+  landscapeMode = !landscapeMode;
+  try { localStorage.setItem("haramia-landscape", landscapeMode ? "1" : "0"); } catch (e) {}
+  render();
+}
+function chatMessagesListHTML() {
+  var msgs = (state && state.chat) || [];
+  var myId = state && state.you ? state.you.id : null;
+  var list = msgs.map(function (m) {
+    var mine = m.from === myId;
+    return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? "flex-end" : "flex-start") + ';margin-bottom:8px">' +
+      '<span style="font-size:10px;color:var(--muted);margin-bottom:2px">' + esc(m.name) + '</span>' +
+      '<span style="background:' + (mine ? "linear-gradient(180deg,#3A2F63,#2A2350)" : "linear-gradient(180deg,#262046,#1E1938)") +
+      ';color:var(--parch);padding:7px 10px;border-radius:12px;font-size:12px;max-width:88%;word-break:break-word">' +
+      esc(m.text) + "</span></div>";
+  }).join("");
+  return list || '<p class="d" style="text-align:center;font-size:11px">لسه مفيش رسايل…</p>';
+}
+function landscapeChatHTML() {
+  return '<div class="lside"><div class="lhead">💬 الشات</div>' +
+    '<div class="lbody" id="lchatlist">' + chatMessagesListHTML() + '</div>' +
+    '<div class="lfoot" style="display:flex;gap:6px">' +
+    '<input id="lchatinput" class="input" style="flex:1;margin:0;font-size:11.5px;padding:9px 10px" placeholder="اكتب…" maxlength="300">' +
+    '<button id="lchatsend" class="btn" style="width:auto;padding:0 10px;margin:0;font-size:11.5px">ابعت</button></div></div>';
+}
+function gameLogHTML() {
+  var log = (state && state.gameLog) || [];
+  var rows = log.slice().reverse().map(function (e) {
+    var text;
+    if (e.kind === "vote") text = e.outcome === "out" ? esc(e.name) + " طلع بالتصويت" : e.outcome === "tie" ? "التصويت اتعادل" : "محدش خد صوت كفاية";
+    else if (e.kind === "thief") text = esc(e.name) + " اتضرب بالليل";
+    else if (e.kind === "cop") text = esc(e.name) + " ضربه الضابط";
+    else if (e.kind === "saved") text = "حد اتضرب بالليل بس الدكتور عالجه وقام بالسلامة";
+    else text = "";
+    return '<div class="logrow"><span class="lday">يوم ' + ar(e.day) + "</span>" + text + "</div>";
+  }).join("");
+  return '<div class="lside"><div class="lhead">📜 اللي حصل</div><div class="lbody">' + (rows || '<p class="d" style="font-size:11px">لسه مفيش أحداث…</p>') + "</div></div>";
+}
+
 var appEl = document.getElementById("app");
 function render() {
   // لو أي خطأ حصل وقت بناء الشاشة، مننساش نحدّث الشاشة القديمة —
   // ده بالظبط اللي كان بيسبب "التجمّد": الشاشة الجديدة بتتبني كاملة
   // في الذاكرة الأول، فلو وقعت في النص، القديمة بتفضل زي ما هي للأبد.
   // دلوقتي أي خطأ رسم بيوري شاشة بديلة واضحة بدل ما يسيب المستخدم
-  // واقف من غير ما يعرف حصل إيه.
+  // واقف من غير ما يعرف حصل إيه. ولو الصفحة نفسها اتقفلت (document
+  // بقى مش متاح) بنتجاهل كل حاجة بأمان تام من غير أي كراش.
+  if (typeof document === "undefined" || !document.getElementById) return;
+  var showLandscape = landscapeMode && client && state;
+  var lWasFocused = false, lPrevValue = "";
   try {
-    appEl.innerHTML = view();
+    var lOldInput = document.getElementById("lchatinput");
+    if (lOldInput) { lWasFocused = document.activeElement === lOldInput; lPrevValue = lOldInput.value; }
+  } catch (e) { return; }
+  try {
+    var mid = view();
+    appEl.innerHTML = showLandscape ? ('<div class="lwrap">' + landscapeChatHTML() + '<div class="lmid">' + mid + "</div>" + gameLogHTML() + "</div>") : mid;
   } catch (e) {
     if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(
       new Date().toTimeString().slice(0, 8) + " — !! فشل بناء الشاشة: " + e.message + (e.stack ? " | " + e.stack.split("\n").slice(0, 2).join(" » ") : ""));
-    appEl.innerHTML = '<div class="mid ctr"><div class="errbox">حصل خطأ في عرض الشاشة. دوس الزرار وجرّب تاني.</div>' +
-      '<button class="btn dark" data-a="rerender">جرّب تاني</button></div>' + footer();
+    try {
+      appEl.innerHTML = '<div class="mid ctr"><div class="errbox">حصل خطأ في عرض الشاشة. دوس الزرار وجرّب تاني.</div>' +
+        '<button class="btn dark" data-a="rerender">جرّب تاني</button></div>' + footer();
+    } catch (e2) { /* الصفحة اتقفلت فعلًا */ }
     return;
   }
   try {
     if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
-    renderChatPanel();
+    if (!showLandscape) renderChatPanel(); // في العرض العريض الشات ظاهر جوه العمود مش عايم
     renderChatToggle();
+    if (showLandscape) restoreInlineChatInput(lPrevValue, lWasFocused);
   } catch (e) { /* الصفحة يمكن اتقفلت أو في تحديث متأخر وصل بعدها — نتجاهله بأمان */ }
+}
+function restoreInlineChatInput(prevValue, wasFocused) {
+  var listEl = document.getElementById("lchatlist");
+  if (listEl) listEl.scrollTop = listEl.scrollHeight;
+  var inp = document.getElementById("lchatinput");
+  if (inp && prevValue) inp.value = prevValue;
+  if (inp && wasFocused) inp.focus();
 }
 function bindFlip() {
   var f = document.getElementById("flip"); if (!f) return;
@@ -1935,6 +2039,7 @@ appEl.addEventListener("click", async function (e) {
   if (k === "resume") { doResume(); return; }
   if (k === "leave") { doLeave(); return; }
   if (k === "about") { uiSheet = { t: "about" }; render(); return; }
+  if (k === "toggleHomeChatEnabled") { homeChatEnabled = !homeChatEnabled; render(); return; }
 
   if (!client) return;
 
@@ -2038,6 +2143,15 @@ window.addEventListener("error", function (e) {
   chatHost.id = "chattogglehost";
   chatHost.innerHTML = chatToggleHTML();
   document.body.appendChild(chatHost);
+
+  var l = document.createElement("button");
+  l.id = "landscapebtn";
+  l.title = "وضع العرض العريض";
+  l.style.cssText = "position:fixed;bottom:10px;right:56px;z-index:150;width:34px;height:34px;" +
+    "border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(30,25,55,.9);color:#8B7FBF;" +
+    "font-size:14px;cursor:pointer";
+  l.textContent = "⛶";
+  document.body.appendChild(l);
 })();
 
 render(); // نعرض "بنتوصّل…" فورًا — من غيرها الشاشة كانت تفضل فاضية تمامًا لحد ما فايربيز يرد
