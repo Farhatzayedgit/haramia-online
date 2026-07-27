@@ -1203,7 +1203,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v18-0727-1336";
+var BUILD_VERSION = "v19-0727-1356";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1441,6 +1441,8 @@ function homeScreen() {
   return h;
 }
 
+var DISCORD_VOICE_LINK = "https://discord.gg/qhSuRbfzZ";
+
 function lobbyScreen() {
   var isHost = state.you.isHost, cfg = state.cfg, n = state.players.length;
   var maxTh = Math.max(1, Math.floor((n - 1) / 2));
@@ -1448,6 +1450,10 @@ function lobbyScreen() {
   var h = '<div class="fade">';
   h += '<p class="eb">كود الأوضة — ابعته لأصحابك</p><div class="codebig">' + esc(state.code) + "</div>" +
     '<p class="codehint">هما هيفتحوا نفس اللينك ويكتبوا الكود ده</p></div>';
+
+  h += '<a href="' + DISCORD_VOICE_LINK + '" target="_blank" rel="noopener" class="btn violet mt" ' +
+    'style="text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px">' +
+    '<span style="font-size:18px">🎙️</span> ادخل الشات الصوتي</a>';
 
   h += '<div class="card mt"><p class="eb">اللاعبين (' + ar(n) + ")</p><div class=\"plist\">";
   state.players.forEach(function (p) {
@@ -1814,6 +1820,16 @@ window.addEventListener("error", function (e) {
   var b = document.createElement("div");
   b.innerHTML = debugToggleHTML();
   document.body.appendChild(b.firstChild);
+
+  var v = document.createElement("a");
+  v.href = DISCORD_VOICE_LINK; v.target = "_blank"; v.rel = "noopener";
+  v.title = "الشات الصوتي";
+  v.style.cssText = "position:fixed;bottom:10px;right:10px;z-index:150;width:40px;height:40px;" +
+    "border-radius:50%;border:1px solid rgba(155,107,214,.4);background:rgba(60,35,90,.92);" +
+    "display:flex;align-items:center;justify-content:center;font-size:18px;text-decoration:none;" +
+    "box-shadow:0 3px 10px rgba(0,0,0,.35)";
+  v.textContent = "🎙️";
+  document.body.appendChild(v);
 })();
 
 render(); // نعرض "بنتوصّل…" فورًا — من غيرها الشاشة كانت تفضل فاضية تمامًا لحد ما فايربيز يرد
