@@ -1203,7 +1203,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v15-0727-1308";
+var BUILD_VERSION = "v16-0727-1319";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1790,10 +1790,15 @@ window.addEventListener("unhandledrejection", function (e) {
 window.addEventListener("error", function (e) {
   if (e.message) {
     var loc = e.filename ? (" [سطر " + e.lineno + ":" + e.colno + "]") : "";
-    showToast("خطأ في الصفحة: " + e.message + loc);
+    // خطأ معروف وموثّق جوه SDK فايربيز نفسه (خدمة heartbeat الداخلية —
+    // إحصائيات استخدام لجوجل، مالهاش علاقة بلعبتنا). بيبان دايمًا "سطر ١"
+    // بعمود ضخم لأنه جوه مكتبة مضغوطة على سطر واحد. بنسجّله للمتابعة بس
+    // مننبّهش المستخدم بيه لأنه مش بيوقف اللعبة فعليًا.
+    var isFirebaseInternalNoise = e.lineno === 1 && e.colno > 5000;
     if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(
-      new Date().toTimeString().slice(0, 8) + " — !! خطأ صفحة: " + e.message + loc +
+      new Date().toTimeString().slice(0, 8) + " — !! خطأ صفحة" + (isFirebaseInternalNoise ? " (داخلي فايربيز، متجاهل)" : "") + ": " + e.message + loc +
       (e.error && e.error.stack ? " | " + e.error.stack.split("\n").slice(0, 3).join(" » ") : ""));
+    if (!isFirebaseInternalNoise) showToast("خطأ في الصفحة: " + e.message + loc);
   }
 });
 
