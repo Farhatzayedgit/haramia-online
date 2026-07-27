@@ -888,6 +888,8 @@ else global.Engine = EngineExports;
 
   /** بيتنادى لكل نية جديدة جاية من أي لاعب (منهم المضيف نفسه). */
   HostBrain.prototype.handle = function (uid, msg) {
+    if (typeof window !== "undefined" && window.__firebaseDebugLog) window.__firebaseDebugLog.push(
+      new Date().toTimeString().slice(0,8) + " — المضيف استلم أمر: " + msg.t + " من " + uid.slice(0,8));
     var s = this.state;
     var self = this;
     try {
@@ -1099,6 +1101,17 @@ else global.Engine = EngineExports;
 (function (global) {
   "use strict";
 
+  /* سجل تشخيص ظاهر على الشاشة — بيسجّل كل خطوة شبكة بتحصل فعليًا،
+   * عشان لو حاجة اتعلّقت من غير أي خطأ، نقدر نشوف فين بالظبط وقفت. */
+  var LOG = [];
+  function log(msg) {
+    var t = new Date().toTimeString().slice(0, 8);
+    LOG.push(t + " — " + msg);
+    if (LOG.length > 80) LOG.shift();
+    if (global.__onDebugLog) global.__onDebugLog();
+  }
+  global.__firebaseDebugLog = LOG;
+
   /* ------------------------------ أدوات مسار عامة ------------------------------ */
   function getAt(obj, path) {
     var parts = path.split("/").filter(Boolean), cur = obj;
@@ -1127,11 +1140,13 @@ else global.Engine = EngineExports;
   }
 
   /** بيقرا استريم SSE عن طريق fetch عادي — مفيش اعتماد على EventSource. */
-  function streamSSE(url, handlers) {
+  function streamSSE(url, handlers, tag) {
     var ctrl = new AbortController();
     var closed = false;
+    log("SSE: بنفتح اتصال (" + (tag || url) + ")");
     fetch(url, { headers: { Accept: "text/event-stream" }, signal: ctrl.signal })
       .then(function (res) {
+        log("SSE: وصل رد أولي (" + (tag || "") + ") status=" + res.status);
         if (!res.ok) {
           return res.text().then(function (t) { throw new Error("HTTP " + res.status + ": " + t); });
         }
@@ -1151,15 +1166,19 @@ else global.Engine = EngineExports;
                 if (line.indexOf("event:") === 0) evt = line.slice(6).trim();
                 else if (line.indexOf("data:") === 0) data += line.slice(5).trim();
               });
-              if (handlers[evt]) { try { handlers[evt](JSON.parse(data)); } catch (e) {} }
+              log("SSE (" + (tag || "") + "): جالي حدث '" + evt + "'" + (data ? " — " + data.slice(0, 90) : ""));
+              if (handlers[evt]) {
+                try { handlers[evt](JSON.parse(data)); }
+                catch (e) { log("SSE (" + (tag || "") + "): !! فشل تفسير الحدث: " + e.message); }
+              }
             });
             return pump();
           });
         }
         return pump();
       })
-      .catch(function (e) { if (!closed && handlers.error) handlers.error(e); });
-    return function () { closed = true; ctrl.abort(); };
+      .catch(function (e) { log("SSE (" + (tag || "") + "): !! الاتصال فشل: " + e.message); if (!closed && handlers.error) handlers.error(e); });
+    return function () { closed = true; ctrl.abort(); log("SSE (" + (tag || "") + "): اتقفل"); };
   }
 
   function FirebaseBackend(config) {
@@ -1189,7 +1208,14 @@ else global.Engine = EngineExports;
    *  محدود بمهلة ١٢ ثانية — من غيرها لو النت اتعلّق، التطبيق كان هيفضل معلّق للأبد. */
   FirebaseBackend.prototype.signIn = function () {
     var self = this;
-    return withTimeout(this._signInInner(), 12000, "الاتصال بفايربيز");
+    log("بندخل بحساب مجهول…");
+    return withTimeout(this._signInInner(), 12000, "الاتصال بفايربيز").then(function (uid) {
+      log("دخلنا بنجاح — uid=" + uid);
+      return uid;
+    }, function (e) {
+      log("!! فشل تسجيل الدخول: " + e.message);
+      throw e;
+    });
   };
   FirebaseBackend.prototype._signInInner = function () {
     var self = this;
@@ -1235,11 +1261,13 @@ else global.Engine = EngineExports;
   /* ------------------------------ قراءة وكتابة ------------------------------ */
   FirebaseBackend.prototype.set = function (path, val) {
     var self = this;
+    log("كتابة: " + path);
     return fetch(this._url(path), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(val) })
       .then(function (r) {
-        if (r.ok) return;
-        return r.text().then(function (t) { var e = new Error("firebase/write-failed: " + t); self._reportErr(e); throw e; });
-      });
+        if (r.ok) { log("كتابة نجحت: " + path); return; }
+        return r.text().then(function (t) { log("!! كتابة فشلت: " + path + " — " + t); var e = new Error("firebase/write-failed: " + t); self._reportErr(e); throw e; });
+      })
+      .catch(function (e) { log("!! كتابة رمت استثناء: " + path + " — " + e.message); throw e; });
   };
   FirebaseBackend.prototype.update = function (path, obj) {
     var self = this;
@@ -1252,6 +1280,7 @@ else global.Engine = EngineExports;
   FirebaseBackend.prototype.push = function (path, val) {
     var self = this;
     var key = genKey();
+    log("دفع (push): " + path + "/" + key + " — نوع الرسالة: " + (val && val.msg && val.msg.t || "?"));
     this.set(path + "/" + key, val).catch(function (e) { self._reportErr(e); });
     return key;
   };
@@ -1281,7 +1310,7 @@ else global.Engine = EngineExports;
         cb(current);
       },
       error: function (err) { self._reportErr(err); },
-    });
+    }, "views:" + path.split("/").pop());
     return stop;
   };
   FirebaseBackend.prototype.onChildAdded = function (path, cb) {
@@ -1306,7 +1335,7 @@ else global.Engine = EngineExports;
         }
       },
       error: function (err) { self._reportErr(err); },
-    });
+    }, "intents");
     return stop;
   };
 
@@ -1721,6 +1750,33 @@ function uiSheetHTML() {
 }
 
 /* ---------------------------- الأحداث ---------------------------- */
+/* ---------------------------- لوحة تشخيص ظاهرة ---------------------------- */
+var debugOpen = false;
+function debugToggleHTML() {
+  return '<button id="dbgbtn" style="position:fixed;bottom:10px;left:10px;z-index:150;width:34px;height:34px;' +
+    'border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(30,25,55,.9);color:#E9A33C;' +
+    'font-size:15px;cursor:pointer">🔧</button>';
+}
+function renderDebugPanel() {
+  var host = document.getElementById("dbgpanel");
+  if (!debugOpen) { if (host) host.remove(); return; }
+  var lines = (window.__firebaseDebugLog || []).slice(-40);
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "dbgpanel";
+    host.style.cssText = "position:fixed;bottom:52px;left:10px;right:10px;max-height:60vh;overflow-y:auto;" +
+      "background:rgba(10,8,20,.96);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:10px;" +
+      "z-index:150;font-family:monospace;font-size:10.5px;color:#B8AEDD;direction:ltr;text-align:left;line-height:1.6";
+    document.body.appendChild(host);
+  }
+  host.innerHTML = lines.map(function (l) { return l.replace(/</g, "&lt;"); }).join("<br>") || "لسه مفيش سجل…";
+  host.scrollTop = host.scrollHeight;
+}
+window.__onDebugLog = function () { if (debugOpen) renderDebugPanel(); };
+document.addEventListener("click", function (e) {
+  if (e.target && e.target.id === "dbgbtn") { debugOpen = !debugOpen; renderDebugPanel(); }
+});
+
 var appEl = document.getElementById("app");
 function render() {
   appEl.innerHTML = view();
@@ -1848,6 +1904,12 @@ window.addEventListener("unhandledrejection", function (e) {
 window.addEventListener("error", function (e) {
   if (e.message) showToast("خطأ في الصفحة: " + e.message);
 });
+
+(function () {
+  var b = document.createElement("div");
+  b.innerHTML = debugToggleHTML();
+  document.body.appendChild(b.firstChild);
+})();
 
 render(); // نعرض "بنتوصّل…" فورًا — من غيرها الشاشة كانت تفضل فاضية تمامًا لحد ما فايربيز يرد
 boot();
