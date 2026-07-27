@@ -1757,10 +1757,18 @@ function renderToasts() {
 }
 window.addEventListener("unhandledrejection", function (e) {
   var m = (e.reason && (e.reason.code || e.reason.message)) || String(e.reason);
+  var stack = e.reason && e.reason.stack ? " | " + e.reason.stack.split("\n").slice(0, 3).join(" » ") : "";
   showToast("خطأ غير متوقع: " + m);
+  if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(new Date().toTimeString().slice(0, 8) + " — !! رفض غير متوقع: " + m + stack);
 });
 window.addEventListener("error", function (e) {
-  if (e.message) showToast("خطأ في الصفحة: " + e.message);
+  if (e.message) {
+    var loc = e.filename ? (" [سطر " + e.lineno + ":" + e.colno + "]") : "";
+    showToast("خطأ في الصفحة: " + e.message + loc);
+    if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(
+      new Date().toTimeString().slice(0, 8) + " — !! خطأ صفحة: " + e.message + loc +
+      (e.error && e.error.stack ? " | " + e.error.stack.split("\n").slice(0, 3).join(" » ") : ""));
+  }
 });
 
 (function () {
