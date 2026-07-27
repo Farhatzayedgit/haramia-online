@@ -1301,10 +1301,21 @@ else global.Engine = EngineExports;
 
   /* ------------------------------ متابعة لحظية عن طريق SSE ------------------------------ */
   FirebaseBackend.prototype.onValue = function (path, cb) {
-    var self = this, current = null;
+    var self = this, current = null, gotFullSnapshot = false;
     var stop = streamSSE(this._url(path), {
-      put: function (e) { current = e.path === "/" ? e.data : setAt(current, e.path, e.data); cb(current); },
+      put: function (e) {
+        current = e.path === "/" ? e.data : setAt(current, e.path, e.data);
+        if (e.path === "/") gotFullSnapshot = true;
+        cb(current);
+      },
       patch: function (e) {
+        // patch بتمثّل فرق عن نسخة كاملة سابقة. لو لسه ماوصلناش نسخة كاملة
+        // (put كامل عند الجذر)، تطبيق الفرق ده هيطلّع كائن ناقص وممكن يوقّع
+        // الواجهة — فبنستنى النسخة الكاملة الأول.
+        if (!gotFullSnapshot) {
+          log("SSE: اتجاهل patch قبل ما نوصل نسخة كاملة");
+          return;
+        }
         if (e.path === "/") { current = Object.assign({}, current, e.data); }
         else { current = setAt(current, e.path, Object.assign({}, getAt(current, e.path), e.data)); }
         cb(current);
@@ -1414,7 +1425,17 @@ var HOST_TIMEOUT_MS = 20000; // المضيف بيبعت نبضة كل ٨ ثوا�
 
 function makeClient(name) {
   client = new window.GameClient(window.__backend, window.__uid, name);
-  client.onState = function (v) { state = v; render(); };
+  client.onState = function (v) {
+    // فايربيز الحقيقي أحيانًا بيبعت تحديث جزئي (مثلاً حقل واحد اتغيّر) بدل
+    // نسخة كاملة. لو استلمنا حاجة ناقصة (مفيش فيها players/you) بنتجاهلها
+    // بدل ما نعرضها ونوقع — ده اللي كان بيسبب "التجمّد" اللي إحنا بنصلّحه.
+    if (v && (!Array.isArray(v.players) || !v.phase)) {
+      if (window.__firebaseDebugLog) window.__firebaseDebugLog.push(
+        new Date().toTimeString().slice(0, 8) + " — !! تجاهلنا تحديث ناقص (مفيش فيه players/phase كاملين)");
+      return;
+    }
+    state = v; render();
+  };
   client.onEmoji = function (m) { floats.push({ id: Math.random().toString(36).slice(2), e: m.e, x: 10 + Math.random() * 72 }); render(); };
 }
 /** المضيف بس هو اللي بيكتب النبضة دي — الباقي بيتابعوها عشان يعرفوا لو غاب فترة طويلة. */
