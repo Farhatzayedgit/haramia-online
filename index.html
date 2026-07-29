@@ -766,6 +766,35 @@ function proceed(s) {
   return beginDay(s);
 }
 
+/** إحصائيات مسلّية بعد ما اللعبة تخلص — من نفس بيانات التصويت اللي عندنا خلاص. */
+function computeFunStats(s) {
+  const nameOf = (id) => (findPlayer(s, id) || {}).name || "؟";
+  const votesReceived = {};
+  const correctVotes = {};
+  s.log.votes.forEach((v) => {
+    const raw = v.raw || {};
+    Object.keys(raw).forEach((voterId) => {
+      const targetId = raw[voterId];
+      if (targetId === null || targetId === undefined) return;
+      votesReceived[targetId] = (votesReceived[targetId] || 0) + 1;
+      const targetPlayer = findPlayer(s, Number(targetId));
+      if (targetPlayer && targetPlayer.role === "thief") correctVotes[voterId] = (correctVotes[voterId] || 0) + 1;
+    });
+  });
+  let mostSuspected = null, maxVotes = 0;
+  Object.keys(votesReceived).forEach((id) => { if (votesReceived[id] > maxVotes) { maxVotes = votesReceived[id]; mostSuspected = Number(id); } });
+  let bestVoter = null, maxCorrect = 0;
+  Object.keys(correctVotes).forEach((id) => { if (correctVotes[id] > maxCorrect) { maxCorrect = correctVotes[id]; bestVoter = Number(id); } });
+  const suspectPlayer = mostSuspected !== null ? findPlayer(s, mostSuspected) : null;
+  return {
+    mostSuspected: mostSuspected !== null && maxVotes > 0 ? {
+      name: nameOf(mostSuspected), count: maxVotes,
+      innocent: !!(suspectPlayer && suspectPlayer.role !== "thief"),
+    } : null,
+    bestVoter: bestVoter !== null && maxCorrect > 0 ? { name: nameOf(bestVoter), count: maxCorrect } : null,
+  };
+}
+
 /* ------------------------------ العرض لكل لاعب ------------------------------ */
 /**
  * أهم دالة في الملف: بترجّع نسخة من الحالة *مفلترة* حسب اللاعب،
@@ -844,6 +873,8 @@ function viewFor(s, playerId) {
     // تقرير التصويت الكامل — بيبان بس لما اللعبة تخلص، عشان محدش يستفيد
     // من معرفة مين صوّت على مين وهو لسه بيلعب.
     voteHistory: s.phase === "over" ? s.log.votes.map((v) => dayTally(s, v.day, v.counts, v.raw, v.out)) : null,
+    funStats: s.phase === "over" ? computeFunStats(s) : null,
+    funStats: s.phase === "over" ? computeFunStats(s) : null,
     // سجل الأحداث كامل من أول يوم — بيبان دايمًا (مش سري)، لأنه نفس المعلومة
     // اللي بتتعلن كل صباح، بس محفوظة عشان تتقرا تاني بعدين. اللي اتضرب بالليل
     // ونجا بيفضل مجهول (نفس قاعدة الخصوصية بتاعة شاشة الصباح بالظبط).
@@ -1355,7 +1386,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v41-0729-0717";
+var BUILD_VERSION = "v43-0729-0733";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1747,7 +1778,7 @@ function dayScreen() {
     }
   }
   h += '<p class="d mt">في الدور ' + ar(alive.length) + " · طلعوا " + ar(state.players.length - alive.length) + "</p>" +
-    '<div class="emos">' + ["😂", "😱", "🤨", "👀", "🤥", "🫵", "🔪", "🙏", "❤️", "🤝"].map(function (e) { return '<button class="emo" data-emo="' + e + '">' + e + "</button>"; }).join("") + "</div></div>";
+    '<div class="emos">' + ["😂", "😱", "🤨", "👀", "🔪", "🙏"].map(function (e) { return '<button class="emo" data-emo="' + e + '">' + e + "</button>"; }).join("") + "</div></div>";
   if (state.you.isHost) h += '<button class="btn" data-a="next">' + (state.talkRound < state.talkRounds ? "الراوند اللي بعده" : "ابدأ التصويت") + "</button>";
   else h += '<p class="d ctr">مستنيين المضيف يكمّل…</p>';
   return h;
@@ -1900,6 +1931,7 @@ function overScreen() {
       '<div class="nm">' + esc(p.name) + "</div>" + badge(m.label, m.color) + "</div>";
   });
   h += "</div>";
+  h += funStatsHTML();
   h += voteHistoryHTML();
   if (state.you.isHost) {
     h += '<div class="row2 mt"><button class="btn" data-a="restart">لعبة تانية سريعة</button>' +
@@ -1909,6 +1941,20 @@ function overScreen() {
   return h;
 }
 
+function funStatsHTML() {
+  var fs = state.funStats;
+  if (!fs || (!fs.mostSuspected && !fs.bestVoter)) return "";
+  var h = '<div class="card mt"><p class="eb">🏆 ألقاب اللعبة</p>';
+  if (fs.mostSuspected) {
+    h += '<div class="lr"><span style="font-size:20px">👀</span><div class="nm">أكتر واحد اتشك فيه<span style="display:block;font-size:11.5px;color:var(--muted);font-weight:500">' +
+      esc(fs.mostSuspected.name) + " — اتصوّت عليه " + ar(fs.mostSuspected.count) + " مرة" + (fs.mostSuspected.innocent ? " (وكان بريء طول الوقت!)" : "") + "</span></div></div>";
+  }
+  if (fs.bestVoter) {
+    h += '<div class="lr"><span style="font-size:20px">🕵️</span><div class="nm">أحسن محقق في الأوضة<span style="display:block;font-size:11.5px;color:var(--muted);font-weight:500">' +
+      esc(fs.bestVoter.name) + " — صوّت صح على حرامي " + ar(fs.bestVoter.count) + " مرة</span></div></div>";
+  }
+  return h + "</div>";
+}
 function voteHistoryHTML() {
   var hist = state.voteHistory;
   if (!hist || !hist.length) return "";
@@ -1953,17 +1999,42 @@ function uiSheetHTML() {
 var chatOpen = false;
 var chatSeenCount = 0; // آخر عدد رسائل شافه المستخدم — عشان نعرف نعرض نقطة "جديد"
 function chatAvailable() { return !!(client && state && state.chatEnabled); }
-function chatToggleHTML() {
-  if (!chatAvailable()) return "";
+function moreMenuToggleHTML() {
   var unread = state && state.chat ? state.chat.length - chatSeenCount : 0;
-  return '<button id="chatbtn" style="position:fixed;bottom:56px;right:10px;z-index:150;width:40px;height:40px;' +
-    'border-radius:50%;border:1px solid rgba(233,163,60,.35);background:rgba(50,40,20,.92);' +
-    'display:flex;align-items:center;justify-content:center;font-size:17px;cursor:pointer;' +
-    'box-shadow:0 3px 10px rgba(0,0,0,.35)">💬' +
+  return '<button id="morebtn" style="position:fixed;bottom:10px;right:10px;z-index:150;width:40px;height:40px;' +
+    'border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(30,25,55,.92);color:#E9A33C;' +
+    'font-size:20px;font-weight:900;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,.35)">⋯' +
     (unread > 0 ? '<span style="position:absolute;top:-3px;left:-3px;background:var(--madder);color:#fff;' +
       'font-family:var(--body);font-size:9.5px;font-weight:800;border-radius:50%;width:16px;height:16px;' +
       'display:flex;align-items:center;justify-content:center">' + Math.min(unread, 9) + '</span>' : '') +
     '</button>';
+}
+var moreMenuOpen = false;
+function renderMoreMenu() {
+  var host = document.getElementById("moreMenuPanel");
+  if (!moreMenuOpen) { if (host) host.remove(); return; }
+  var unread = state && state.chat ? state.chat.length - chatSeenCount : 0;
+  var itemStyle = "display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;color:var(--parch);" +
+    "text-decoration:none;font-size:13.5px;font-weight:600;background:none;border:none;width:100%;text-align:right;" +
+    "font-family:inherit;cursor:pointer";
+  var rows = '<a href="' + DISCORD_VOICE_LINK + '" target="_blank" rel="noopener" style="' + itemStyle + '">🎙️ الشات الصوتي</a>';
+  if (chatAvailable()) rows += '<button data-a="moreChat" style="' + itemStyle + '">💬 الشات' +
+    (unread > 0 ? '<span style="background:var(--madder);color:#fff;font-size:10px;font-weight:800;border-radius:50%;' +
+      'width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-inline-start:auto">' + Math.min(unread, 9) + '</span>' : '') + '</button>';
+  rows += '<button data-a="moreLandscape" style="' + itemStyle + '">⛶ وضع العرض العريض' + (landscapeMode ? " ✓" : "") + '</button>';
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "moreMenuPanel";
+    host.style.cssText = "position:fixed;bottom:58px;right:10px;z-index:150;background:rgba(20,16,38,.97);" +
+      "border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:6px;display:flex;flex-direction:column;gap:1px;" +
+      "min-width:190px;box-shadow:0 12px 30px rgba(0,0,0,.5)";
+    document.body.appendChild(host);
+  }
+  host.innerHTML = rows;
+}
+function renderMoreButton() {
+  var host = document.getElementById("chattogglehost");
+  if (host) host.innerHTML = moreMenuToggleHTML();
 }
 function renderChatPanel() {
   var host = document.getElementById("chatpanel");
@@ -2012,29 +2083,29 @@ function sendChat(inputId) {
   client.send({ t: "chat", text: text });
 }
 document.addEventListener("click", function (e) {
-  if (e.target && e.target.id === "chatbtn") { chatOpen = !chatOpen; renderChatPanel(); renderChatToggle(); return; }
-  if (e.target && e.target.id === "chatclose") { chatOpen = false; renderChatPanel(); renderChatToggle(); return; }
+  if (e.target && e.target.id === "morebtn") { moreMenuOpen = !moreMenuOpen; renderMoreMenu(); return; }
+  var moreChatBtn = e.target.closest && e.target.closest('[data-a="moreChat"]');
+  if (moreChatBtn) { chatOpen = !chatOpen; moreMenuOpen = false; renderChatPanel(); renderMoreMenu(); return; }
+  var moreLandBtn = e.target.closest && e.target.closest('[data-a="moreLandscape"]');
+  if (moreLandBtn) { moreMenuOpen = false; renderMoreMenu(); toggleLandscape(); return; }
+  if (e.target && e.target.id === "chatclose") { chatOpen = false; renderChatPanel(); renderMoreMenu(); return; }
   if (e.target && e.target.id === "chatsend") { sendChat("chatinput"); return; }
   if (e.target && e.target.id === "lchatsend") { sendChat("lchatinput"); return; }
-  if (e.target && e.target.id === "landscapebtn") { toggleLandscape(); return; }
+  // لو دوس في أي مكان تاني بره القايمة أو الزرار، نقفلها
+  if (moreMenuOpen && !e.target.closest("#moreMenuPanel") && e.target.id !== "morebtn") { moreMenuOpen = false; renderMoreMenu(); }
 });
 document.addEventListener("keydown", function (e) {
   if (e.target && e.target.id === "chatinput" && e.key === "Enter") { sendChat("chatinput"); }
   if (e.target && e.target.id === "lchatinput" && e.key === "Enter") { sendChat("lchatinput"); }
 });
-function renderChatToggle() {
-  var host = document.getElementById("chattogglehost");
-  if (host) host.innerHTML = chatToggleHTML();
-}
 
 var debugOpen = false;
 function debugToggleHTML() {
-  return '<div style="position:fixed;bottom:10px;left:10px;z-index:150;display:flex;align-items:center;gap:6px">' +
-    '<button id="dbgbtn" style="width:34px;height:34px;' +
-    'border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(30,25,55,.9);color:#E9A33C;' +
-    'font-size:15px;cursor:pointer">🔧</button>' +
-    '<span style="background:rgba(30,25,55,.9);color:#8B7FBF;font-family:monospace;font-size:9.5px;' +
-    'padding:5px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.1)">' + BUILD_VERSION + '</span></div>';
+  // زرار 🔧 اتشال من الشكل العادي — دي أداة تشخيص للمطوّر مش للاعب العادي.
+  // لسه متاحة لو احتجناها: اضغط مطوّل (نص ثانية) على رقم النسخة ده.
+  return '<div style="position:fixed;bottom:10px;left:10px;z-index:150">' +
+    '<span id="verbadge" style="background:rgba(30,25,55,.9);color:#8B7FBF;font-family:monospace;font-size:9.5px;' +
+    'padding:5px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.1);user-select:none;cursor:default">' + BUILD_VERSION + '</span></div>';
 }
 function renderDebugPanel() {
   var host = document.getElementById("dbgpanel");
@@ -2052,8 +2123,16 @@ function renderDebugPanel() {
   host.scrollTop = host.scrollHeight;
 }
 window.__onDebugLog = function () { if (debugOpen) renderDebugPanel(); };
+var verbadgeHoldTimer = null;
+document.addEventListener("pointerdown", function (e) {
+  if (e.target && e.target.id === "verbadge") {
+    verbadgeHoldTimer = setTimeout(function () { debugOpen = !debugOpen; renderDebugPanel(); buzz(20); }, 600);
+  }
+});
+["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) {
+  document.addEventListener(ev, function () { if (verbadgeHoldTimer) { clearTimeout(verbadgeHoldTimer); verbadgeHoldTimer = null; } });
+});
 document.addEventListener("click", function (e) {
-  if (e.target && e.target.id === "dbgbtn") { debugOpen = !debugOpen; renderDebugPanel(); }
   var fwBtn = e.target.closest && e.target.closest('[data-a="fwSeen"]');
   if (fwBtn && client) { client.send({ t: "farewellSeen" }); var m = document.getElementById("farewellModal"); if (m) m.remove(); }
 });
@@ -2160,7 +2239,8 @@ function render() {
     if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
     if (!showLandscape) renderChatPanel(); // في العرض العريض الشات ظاهر جوه العمود مش عايم
     renderFarewellModal();
-    renderChatToggle();
+    renderMoreButton();
+    renderMoreMenu();
     if (showLandscape) restoreInlineChatInput(lPrevValue, lWasFocused);
   } catch (e) { /* الصفحة يمكن اتقفلت أو في تحديث متأخر وصل بعدها — نتجاهله بأمان */ }
 }
@@ -2355,29 +2435,10 @@ window.addEventListener("error", function (e) {
   b.innerHTML = debugToggleHTML();
   document.body.appendChild(b.firstChild);
 
-  var v = document.createElement("a");
-  v.href = DISCORD_VOICE_LINK; v.target = "_blank"; v.rel = "noopener";
-  v.title = "الشات الصوتي";
-  v.style.cssText = "position:fixed;bottom:10px;right:10px;z-index:150;width:40px;height:40px;" +
-    "border-radius:50%;border:1px solid rgba(155,107,214,.4);background:rgba(60,35,90,.92);" +
-    "display:flex;align-items:center;justify-content:center;font-size:18px;text-decoration:none;" +
-    "box-shadow:0 3px 10px rgba(0,0,0,.35)";
-  v.textContent = "🎙️";
-  document.body.appendChild(v);
-
   var chatHost = document.createElement("div");
   chatHost.id = "chattogglehost";
-  chatHost.innerHTML = chatToggleHTML();
+  chatHost.innerHTML = moreMenuToggleHTML();
   document.body.appendChild(chatHost);
-
-  var l = document.createElement("button");
-  l.id = "landscapebtn";
-  l.title = "وضع العرض العريض";
-  l.style.cssText = "position:fixed;bottom:10px;right:56px;z-index:150;width:34px;height:34px;" +
-    "border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(30,25,55,.9);color:#8B7FBF;" +
-    "font-size:14px;cursor:pointer";
-  l.textContent = "⛶";
-  document.body.appendChild(l);
 })();
 
 render(); // نعرض "بنتوصّل…" فورًا — من غيرها الشاشة كانت تفضل فاضية تمامًا لحد ما فايربيز يرد
