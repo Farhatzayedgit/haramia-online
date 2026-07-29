@@ -265,6 +265,7 @@ const ROLES = {
   doctor:   { key: "doctor",   label: "دكتور",    team: "village", color: "#CFE8E1", ink: "#12302B" },
   cop:      { key: "cop",      label: "ضابط",     team: "village", color: "#E9A33C", ink: "#221602" },
   traitor:  { key: "traitor",  label: "خاين",     team: "solo",    color: "#9B6BD6", ink: "#180B2B" },
+  rami:     { key: "rami",     label: "الرامي",   team: "village", color: "#4A7FD9", ink: "#0B1C33" },
 };
 
 const ROLE_DESC = {
@@ -273,10 +274,11 @@ const ROLE_DESC = {
   doctor: "كل ليلة بتنقذ حد — من غير ما تعرف مين اللي اتضرب.",
   cop: "كل ليلة بتضرب واحد بتشك فيه. لو غلطت، تبقى خسّرت بريء.",
   traitor: "مالكش صف. عندك مهمة سرية لازم تعملها — محدش يعرفك، ولو فشلت هتتفضح.",
+  rami: "معاك رمية وحيدة طول اللعبة. بالليل تقدر تتهم حد اتهام نهائي: لو صح، يطلع فورًا. لو غلطت، إنت اللي هتطلع بدله.",
 };
 
 const DEFAULT_CFG = {
-  thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false,
+  thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false,
   talkSeconds: 120, voteSeconds: 60, talkRounds: 2,
 };
 
@@ -294,7 +296,7 @@ function validateCfg(cfg, n) {
   if (n < 3) return "لازم ٣ لاعبين على الأقل.";
   if (n > 15) return "أقصى عدد ١٥ لاعب.";
   if (cfg.thieves < 1 || cfg.thieves > maxTh) return `عدد الحرامية لازم يكون من ١ لـ ${maxTh}.`;
-  const taken = cfg.thieves + (cfg.doctor ? 1 : 0) + (cfg.cop ? 1 : 0) + (cfg.traitor ? 1 : 0);
+  const taken = cfg.thieves + (cfg.doctor ? 1 : 0) + (cfg.cop ? 1 : 0) + (cfg.traitor ? 1 : 0) + (cfg.rami ? 1 : 0);
   if (n - taken < 1) return "لازم يفضل واحد على الأقل من أهل القرية.";
   return null;
 }
@@ -474,6 +476,7 @@ function createRoom(code, hostId) {
     missionStatus: "wait",
     missionShown: false,
     chat: [],
+    farewell: null, // {from, to, text} — سر بيقوله اللي طلع بالتصويت لحد واحد بس، قبل ما هويته تتكشف
     result: null,
     deadline: null,
     version: 0,
@@ -521,10 +524,11 @@ function startGame(s) {
   if (s.cfg.doctor) roles.push("doctor");
   if (s.cfg.cop) roles.push("cop");
   if (s.cfg.traitor) roles.push("traitor");
+  if (s.cfg.rami) roles.push("rami");
   while (roles.length < n) roles.push("villager");
 
   const mixed = shuffle(roles);
-  s.players.forEach((p, i) => { p.role = mixed[i]; p.alive = true; p.seen = false; });
+  s.players.forEach((p, i) => { p.role = mixed[i]; p.alive = true; p.seen = false; p.ramiUsed = false; });
 
   s.mission = s.cfg.traitor ? pickMission(s.cfg, s.players) : null;
   s.missionStatus = "wait";
@@ -565,6 +569,7 @@ function beginVote(s) {
   s.phase = "vote";
   s.voteOutcome = null;
   s.votes = {};
+  s.farewellSentThisRound = false;
   s.deadline = now() + s.cfg.voteSeconds * 1000;
   return s;
 }
@@ -614,6 +619,7 @@ function nightOrder(s) {
   const order = [];
   if (s.cfg.nightKill && thievesAlive(s).length) order.push("thieves");
   if (s.cfg.cop && alivePlayers(s).some((p) => p.role === "cop")) order.push("cop");
+  if (s.cfg.rami && alivePlayers(s).some((p) => p.role === "rami" && !p.ramiUsed)) order.push("rami");
   if (s.cfg.doctor && alivePlayers(s).some((p) => p.role === "doctor")) {
     const confirmOnly = !s.cfg.nightKill && !s.cfg.cop;
     if (!confirmOnly || s.nominated !== null) order.push("doctor");
@@ -628,7 +634,7 @@ function beginNight(s) {
   const order = nightOrder(s);
   if (!order.length) return resolveMorning(s);
   s.phase = "night";
-  s.night = { order, idx: 0, thief: null, cop: null, healed: [], picks: {} };
+  s.night = { order, idx: 0, thief: null, cop: null, rami: null, healed: [], picks: {} };
   s.deadline = null;
   return s;
 }
@@ -654,6 +660,15 @@ function nightAction(s, playerId, payload) {
     Object.keys(tally).forEach((k) => { if (tally[k] > best) { best = tally[k]; top = Number(k); } });
     s.night.thief = top;
     s.night.picks = {};
+    return { state: advanceNight(s), advanced: true };
+  }
+
+  if (step === "rami") {
+    if (me.role !== "rami") throw new Error("الدور مش عليك.");
+    if (payload.skip) return { state: advanceNight(s), advanced: true };
+    const t = findPlayer(s, payload.target);
+    if (!t || !t.alive || t.id === playerId) throw new Error("اختار حد تاني لسه في الدور.");
+    s.night.rami = { by: playerId, target: payload.target, correct: t.role === "thief" };
     return { state: advanceNight(s), advanced: true };
   }
 
@@ -689,11 +704,17 @@ function advanceNight(s) {
 
 /* ------------------------------ الصباح ------------------------------ */
 function resolveMorning(s) {
-  const n = s.night || { thief: null, cop: null, healed: [] };
+  const n = s.night || { thief: null, cop: null, rami: null, healed: [] };
   const healed = n.healed || [];
   const ev = [];
   if (n.thief !== null && n.thief !== undefined) ev.push({ kind: "thief", target: n.thief, saved: healed.includes(n.thief) });
   if (n.cop !== null && n.cop !== undefined) ev.push({ kind: "cop", target: n.cop, saved: healed.includes(n.cop) });
+  if (n.rami) {
+    const ramiPlayer = findPlayer(s, n.rami.by);
+    if (ramiPlayer) ramiPlayer.ramiUsed = true;
+    // الرمية مش قابلة إن الدكتور ينقذها — نتيجة قرار، مش هجوم
+    ev.push({ kind: "rami", target: n.rami.correct ? n.rami.target : n.rami.by, saved: false, correct: n.rami.correct, accuser: n.rami.by, accused: n.rami.target });
+  }
   if (s.nominated !== null && s.nominated !== undefined) ev.push({ kind: "vote", target: s.nominated, saved: healed.includes(s.nominated) });
 
   const dead = new Set(ev.filter((e) => !e.saved).map((e) => e.target));
@@ -772,6 +793,7 @@ function viewFor(s, playerId) {
   const myTurn =
     step === "thieves" ? !!(me && me.role === "thief" && me.alive && !(me.id in s.night.picks)) :
     step === "cop" ? !!(me && me.role === "cop" && me.alive) :
+    step === "rami" ? !!(me && me.role === "rami" && me.alive) :
     step === "doctor" ? !!(me && me.role === "doctor" && me.alive) : false;
 
   return {
@@ -782,6 +804,8 @@ function viewFor(s, playerId) {
     missionShown: !!s.missionShown,
     chat: s.chat || [],
     chatEnabled: s.chatEnabled !== false,
+    farewellForMe: s.farewell && s.farewell.to === (me && me.id) ? { fromName: (findPlayer(s, s.farewell.from) || {}).name || "؟", text: s.farewell.text } : null,
+    canSendFarewell: s.phase === "tally" && !!me && me.id === s.nominated && !s.farewellSentThisRound,
     day: s.day,
     talkRound: s.talkRound,
     talkRounds: s.cfg.talkRounds,
@@ -809,6 +833,9 @@ function viewFor(s, playerId) {
           kind: e.kind, saved: e.saved,
           name: e.saved && e.kind !== "vote" ? null : (findPlayer(s, e.target) || { name: null }).name,
           role: e.saved ? null : roleOf(s, e.target),
+          correct: e.kind === "rami" ? e.correct : null,
+          accuserName: e.kind === "rami" ? (findPlayer(s, e.accuser) || { name: null }).name : null,
+          accusedName: e.kind === "rami" ? (findPlayer(s, e.accused) || { name: null }).name : null,
         })) : [],
     traitorReveal: (s.phase === "traitor" || s.phase === "over") && s.mission ? {
       name: (s.players.find((p) => p.role === "traitor") || { name: null }).name,
@@ -853,6 +880,7 @@ function dayTally(s, day, counts, raw, out) {
     day,
     outcome: out !== null && out !== undefined ? "ok" : (targets.length ? "tie" : "none"),
     outName: nameOf(out),
+    outId: out !== null && out !== undefined ? Number(out) : null,
     tally: targets.map((targetId) => ({
       name: nameOf(targetId),
       count: counts[targetId],
@@ -1039,6 +1067,20 @@ else global.Engine = EngineExports;
           s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
           s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {};
           E.startGame(s);
+          break;
+        }
+        case "farewell": {
+          if (s.phase !== "tally" || id !== s.nominated || s.farewellSentThisRound) return;
+          var toP = E.findPlayer(s, Number(msg.to));
+          if (!toP || toP.id === id) return;
+          var fText = String(msg.text || "").trim().slice(0, 200);
+          if (!fText) return;
+          s.farewell = { from: id, to: toP.id, text: fText };
+          s.farewellSentThisRound = true;
+          break;
+        }
+        case "farewellSeen": {
+          if (s.farewell && s.farewell.to === id) s.farewell = null;
           break;
         }
         case "chat": {
@@ -1313,7 +1355,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v37-0729-0641";
+var BUILD_VERSION = "v41-0729-0717";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1513,7 +1555,8 @@ function emblem(role, size, color) {
     doctor: '<path ' + a + ' d="M24 41s-14-8.5-14-18a8 8 0 0 1 14-5.3A8 8 0 0 1 38 23c0 9.5-14 18-14 18Z"/><path ' + a + ' d="M24 20v9M19.5 24.5h9"/>',
     cop: '<path ' + a + ' d="M24 5l4.6 4.2 6.2-.6 1.4 6.1 5.3 3.3-2.7 5.6 2.7 5.6-5.3 3.3-1.4 6.1-6.2-.6L24 42l-4.6-4.2-6.2.6-1.4-6.1L6.5 29l2.7-5.6L6.5 18l5.3-3.3 1.4-6.1 6.2.6L24 5Z"/><path ' + a + ' d="M19 23.5l3.6 3.6L29.5 20"/>',
     traitor: '<circle ' + a + ' cx="24" cy="24" r="17"/><path ' + a + ' d="M24 7v34"/><path ' + a + ' d="M13.5 31c3 3.2 7 3.2 10.5 0"/><path ' + a + ' d="M24 31c3.5-3.2 7.5-3.2 10.5 0"/><path fill="none" stroke="' + (color || "currentColor") + '" stroke-width="3.6" stroke-linecap="round" d="M16.5 19.5h.02M31.5 19.5h.02"/>',
-    villager: '<path ' + a + ' d="M7 22 24 8l17 14"/><path ' + a + ' d="M11 20v18h26V20"/><path ' + a + ' d="M20 38V27h8v11"/>'
+    villager: '<path ' + a + ' d="M7 22 24 8l17 14"/><path ' + a + ' d="M11 20v18h26V20"/><path ' + a + ' d="M20 38V27h8v11"/>',
+    rami: '<circle ' + a + ' cx="24" cy="24" r="16"/><circle ' + a + ' cx="24" cy="24" r="9"/><circle fill="' + (color || "currentColor") + '" cx="24" cy="24" r="2.6"/><path ' + a + ' d="M36 8l-8 8"/><path ' + a + ' d="M36 8v6M36 8h-6"/>'
   }[role || "villager"];
   return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 48 48">' + inner + "</svg>";
 }
@@ -1603,7 +1646,7 @@ var DISCORD_VOICE_LINK = "https://discord.gg/qhSuRbfzZ";
 function lobbyScreen() {
   var isHost = state.you.isHost, cfg = state.cfg, n = state.players.length;
   var maxTh = Math.max(1, Math.floor((n - 1) / 2));
-  var villagers = n - cfg.thieves - (cfg.doctor ? 1 : 0) - (cfg.cop ? 1 : 0) - (cfg.traitor ? 1 : 0);
+  var villagers = n - cfg.thieves - (cfg.doctor ? 1 : 0) - (cfg.cop ? 1 : 0) - (cfg.traitor ? 1 : 0) - (cfg.rami ? 1 : 0);
   var h = '<div class="fade">';
   h += '<p class="eb">كود الأوضة — ابعته لأصحابك</p><div class="codebig">' + esc(state.code) + "</div>" +
     '<p class="codehint">هما هيفتحوا نفس اللينك ويكتبوا الكود ده</p></div>';
@@ -1629,6 +1672,7 @@ function lobbyScreen() {
       toggleRow("doctor", cfg.doctor, "الدكتور", "بينقذ اللي اتضرب") +
       toggleRow("cop", cfg.cop, "الضابط", "بيضرب كل ليلة واحد بيشك فيه") +
       toggleRow("traitor", cfg.traitor, "الخاين", "بياخد مهمة سرية") +
+      toggleRow("rami", cfg.rami, "الرامي", "معاه رمية وحيدة — اتهام نهائي بالليل") +
       toggleRow("thief", cfg.nightKill, "الحرامية بيضربوا بالليل", "لو مقفول، بيكسبوا بالتصويت بس", "nightKill") +
       "</div>";
     h += '<div class="card"><div class="sw" data-a="toggleRoomChat"><div class="swl">' +
@@ -1685,6 +1729,7 @@ function revealScreen() {
 }
 
 var dayTimerChoice = 60; // اختيار مدة التايمر قبل ما نشغّله (بالثواني)، من ٣٠ لـ١٢٠
+var farewellTarget = null; // اللاعب المختار لإرسال السر ليه
 
 function dayScreen() {
   var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : null;
@@ -1745,9 +1790,24 @@ function tallyScreen() {
       '<div class="c">' + ar(r.count) + "</div></div>";
   });
   h += "</div>";
+
+  if (state.canSendFarewell) {
+    var others = state.players.filter(function (p) { return p.id !== state.you.id && p.alive; });
+    h += '<div class="card mt"><p class="eb">قبل ما تطلع…</p><p class="d" style="margin-bottom:10px">عايز تقول سر لحد؟ هيوصله هو بس، محدش تاني هيشوفه.</p>';
+    if (farewellTarget === null) {
+      h += '<div class="grid">' + others.map(function (p) { return '<button data-a="fwPick:' + p.id + '" class="pick">' + esc(p.name) + "</button>"; }).join("") + "</div>";
+    } else {
+      var tname = (others.find(function (p) { return p.id === farewellTarget; }) || {}).name || "";
+      h += '<p class="d" style="margin-bottom:8px">هتقول سر لـ <b style="color:var(--saffron)">' + esc(tname) + "</b></p>" +
+        '<input class="input" id="fwText" placeholder="اكتب رسالتك…" maxlength="150">' +
+        '<div class="row2 mt"><button class="btn" data-a="fwSend">ابعت</button><button class="btn ghost" data-a="fwCancel">رجّع</button></div>';
+    }
+    h += "</div>";
+  }
+
   if (state.you.isHost) {
-    h += '<div class="row2 mt"><button class="btn" data-a="tallyNext">كمّلوا</button>' +
-      '<button class="btn dark" data-a="revote">صوّتوا تاني</button></div>';
+    h += '<button class="btn mt" data-a="tallyNext">كمّلوا</button>' +
+      '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="revote">صوّتوا تاني</button>';
   } else {
     h += '<p class="d ctr mt">مستنيين المضيف يكمّل أو يعيد التصويت…</p>';
   }
@@ -1756,8 +1816,8 @@ function tallyScreen() {
 
 function nightScreen() {
   var step = state.nightStep;
-  var meta = { thieves: ROLES.thief, cop: ROLES.cop, doctor: ROLES.doctor }[step] || ROLES.villager;
-  var title = { thieves: "دور الحرامية", cop: "دور الضابط", doctor: "دور الدكتور" }[step];
+  var meta = { thieves: ROLES.thief, cop: ROLES.cop, doctor: ROLES.doctor, rami: ROLES.rami }[step] || ROLES.villager;
+  var title = { thieves: "دور الحرامية", cop: "دور الضابط", doctor: "دور الدكتور", rami: "دور الرامي" }[step];
   if (!state.myTurn) {
     return '<div class="mid ctr">' + ctrEmblem("villager", 58, "var(--faint)") +
       '<h1 class="t mt">الليل</h1><p class="d" style="max-width:280px;margin:0 auto">غمّض عينيك. ' + title + " دلوقتي — استنى لحد الصبح.</p></div>";
@@ -1776,17 +1836,31 @@ function nightScreen() {
     return true;
   });
   var multi = step === "doctor" ? state.doctorHeals : 1;
-  return '<p class="eb">دورك دلوقتي</p><h1 class="t" style="color:' + meta.color + '">' + title + "</h1>" +
-    '<p class="d" style="margin-bottom:12px">' + (multi > 1 ? "اختار " + ar(multi) + " تعالجهم" : "اختار واحد.") +
+  var h = '<p class="eb">دورك دلوقتي</p><h1 class="t" style="color:' + meta.color + '">' + title + "</h1>" +
+    '<p class="d" style="margin-bottom:12px">' + (step === "rami" ? "دي رمية وحيدة طول اللعبة — استخدمها بحذر، أو سيبها لبعدين." :
+      multi > 1 ? "اختار " + ar(multi) + " تعالجهم" : "اختار واحد.") +
     (step === "thieves" && (state.you.partners || []).length ? "  ·  معاك " + esc(state.you.partners.join(" و")) : "") + "</p>" +
     '<div class="grid" id="nightGrid">' + alive.map(function (p) { return '<button data-a="npick:' + p.id + '" class="pick">' + esc(p.name) + "</button>"; }).join("") + "</div>" +
     '<button class="btn mt" id="nightGo" data-a="nightGo" disabled>خلاص — غمّض</button>';
+  if (step === "rami") h += '<button class="btn ghost mt" data-a="nightSkip">مش دلوقتي — سيب الرمية لبعدين</button>';
+  return h;
 }
 
 var nightPicks = [];
 function morningScreen() {
   if (state.eventIdx >= state.events.length) return '<div class="mid ctr"><div class="spin"></div></div>';
   var e = state.events[state.eventIdx];
+  if (e.kind === "rami") {
+    var h2 = '<p class="eb">صباح اليوم ' + ar(state.day) + "</p><div class=\"mid ctr\">" +
+      '<p class="d">' + ar(state.eventIdx + 1) + " من " + ar(state.events.length) + "</p>";
+    h2 += '<div style="margin:12px 0">' + ctrEmblem("rami", 58, "var(--saffron)") + "</div>";
+    h2 += '<h1 class="t">الرامي اتهم ' + esc(e.accusedName || "حدّ") + "</h1>";
+    if (e.correct) h2 += '<p class="d" style="margin-bottom:12px">وكان صح! ' + esc(e.accusedName || "") + " كان بينهم فعلًا، وطلع برّا الدور فورًا.</p>";
+    else h2 += '<p class="d" style="margin-bottom:12px">بس غلط… ' + esc(e.accuserName || "الرامي") + " هو اللي طلع بدله.</p>";
+    h2 += "</div>";
+    h2 += state.you.isHost ? '<button class="btn" data-a="morningNext">التالي</button>' : '<p class="d ctr">مستنيين المضيف…</p>';
+    return h2;
+  }
   var head = { thief: "الحرامية ضربوا", cop: "الضابط ضرب", vote: "الناس صوّتوا على" }[e.kind];
   var rm = e.role ? ROLES[e.role] : ROLES.doctor;
   var h = '<p class="eb">صباح اليوم ' + ar(state.day) + "</p><div class=\"mid ctr\">" +
@@ -1980,6 +2054,8 @@ function renderDebugPanel() {
 window.__onDebugLog = function () { if (debugOpen) renderDebugPanel(); };
 document.addEventListener("click", function (e) {
   if (e.target && e.target.id === "dbgbtn") { debugOpen = !debugOpen; renderDebugPanel(); }
+  var fwBtn = e.target.closest && e.target.closest('[data-a="fwSeen"]');
+  if (fwBtn && client) { client.send({ t: "farewellSeen" }); var m = document.getElementById("farewellModal"); if (m) m.remove(); }
 });
 
 /* ---------------------------- وضع العرض العريض (بالثلاث أعمدة) ---------------------------- */
@@ -2083,10 +2159,30 @@ function render() {
   try {
     if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
     if (!showLandscape) renderChatPanel(); // في العرض العريض الشات ظاهر جوه العمود مش عايم
+    renderFarewellModal();
     renderChatToggle();
     if (showLandscape) restoreInlineChatInput(lPrevValue, lWasFocused);
   } catch (e) { /* الصفحة يمكن اتقفلت أو في تحديث متأخر وصل بعدها — نتجاهله بأمان */ }
 }
+function renderFarewellModal() {
+  var host = document.getElementById("farewellModal");
+  var fw = state && state.farewellForMe;
+  if (!fw) { if (host) host.remove(); return; }
+  if (host) return; // ظاهرة خلاص، مش محتاجين نعيد بناءها كل رسمة
+  host = document.createElement("div");
+  host.id = "farewellModal";
+  host.style.cssText = "position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;" +
+    "background:rgba(8,6,16,.72);padding:20px";
+  host.innerHTML = '<div style="max-width:340px;width:100%;background:linear-gradient(160deg,#2E2758,#191430);' +
+    'border:1px solid rgba(233,163,60,.35);border-radius:20px;padding:22px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.5)">' +
+    '<div style="font-size:34px;margin-bottom:8px">🤫</div>' +
+    '<p style="font-family:var(--body);font-weight:800;font-size:13px;color:var(--saffron);margin:0 0 4px">' + esc(fw.fromName) + ' قالك سر قبل ما يطلع</p>' +
+    '<p style="font-size:15px;line-height:1.6;color:var(--parch);margin:14px 0;font-weight:700">' + esc(fw.text) + '</p>' +
+    '<button class="btn dark" data-a="fwSeen" style="margin-top:6px">تمام</button></div>';
+  document.body.appendChild(host);
+  buzz(15);
+}
+
 function restoreInlineChatInput(prevValue, wasFocused) {
   var listEl = document.getElementById("lchatlist");
   if (listEl) listEl.scrollTop = listEl.scrollHeight;
@@ -2181,6 +2277,16 @@ appEl.addEventListener("click", async function (e) {
   if (k === "forceVote") { client.send({ t: "forceVote" }); return; }
   if (k === "tallyNext") { client.send({ t: "tallyNext" }); return; }
   if (k === "revote") { client.send({ t: "revote" }); return; }
+  if (k === "fwPick") { farewellTarget = Number(parts[1]); render(); return; }
+  if (k === "fwCancel") { farewellTarget = null; render(); return; }
+  if (k === "fwSend") {
+    var fwInp = document.getElementById("fwText");
+    if (!fwInp || !fwInp.value.trim() || farewellTarget === null) return;
+    client.send({ t: "farewell", to: farewellTarget, text: fwInp.value.trim() });
+    farewellTarget = null;
+    render();
+    return;
+  }
   if (k === "heal") { client.send({ t: "night", heal: parts[1] === "1" }); return; }
   if (k === "npick") {
     var pid = Number(parts[1]);
@@ -2200,11 +2306,12 @@ appEl.addEventListener("click", async function (e) {
     return;
   }
   if (k === "nightGo") {
-    if (state.nightStep === "thieves" || state.nightStep === "cop") client.send({ t: "night", target: nightPicks[0] });
+    if (state.nightStep === "thieves" || state.nightStep === "cop" || state.nightStep === "rami") client.send({ t: "night", target: nightPicks[0] });
     else client.send({ t: "night", targets: nightPicks.slice() });
     nightPicks = [];
     return;
   }
+  if (k === "nightSkip") { client.send({ t: "night", skip: true }); return; }
   if (k === "morningNext") { client.send({ t: "morningNext" }); return; }
   if (k === "again") { client.send({ t: "again" }); return; }
   if (k === "restart") { client.send({ t: "restart" }); return; }
