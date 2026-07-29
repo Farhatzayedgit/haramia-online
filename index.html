@@ -278,7 +278,7 @@ const ROLE_DESC = {
 };
 
 const DEFAULT_CFG = {
-  thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false,
+  thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false, doctorHealCount: 1,
   talkSeconds: 120, voteSeconds: 60, talkRounds: 2,
 };
 
@@ -627,7 +627,7 @@ function nightOrder(s) {
   return order;
 }
 
-const doctorHeals = (cfg) => (cfg.nightKill || cfg.cop ? 2 : 1);
+const doctorHeals = (cfg) => Math.max(1, Math.min(3, Number(cfg.doctorHealCount) || 1));
 const doctorConfirmMode = (cfg) => !cfg.nightKill && !cfg.cop;
 
 function beginNight(s) {
@@ -1040,6 +1040,7 @@ else global.Engine = EngineExports;
           merged.talkSeconds = Math.max(15, Math.min(600, Number(merged.talkSeconds) || 120));
           merged.voteSeconds = Math.max(10, Math.min(300, Number(merged.voteSeconds) || 60));
           merged.talkRounds = Math.max(1, Math.min(4, Number(merged.talkRounds) || 2));
+          merged.doctorHealCount = Math.max(1, Math.min(3, Number(merged.doctorHealCount) || 1));
           s.cfg = merged;
           break;
         }
@@ -1386,7 +1387,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v43-0729-0733";
+var BUILD_VERSION = "v44-0729-1130";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1706,6 +1707,12 @@ function lobbyScreen() {
       toggleRow("rami", cfg.rami, "الرامي", "معاه رمية وحيدة — اتهام نهائي بالليل") +
       toggleRow("thief", cfg.nightKill, "الحرامية بيضربوا بالليل", "لو مقفول، بيكسبوا بالتصويت بس", "nightKill") +
       "</div>";
+    if (cfg.doctor) {
+      h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
+        ctrEmblem("doctor", 24, "var(--saffron)") + '<div><div class="swt">عدد اللي الدكتور يعالجهم كل ليلة</div><div class="sws">من ١ لـ٣</div></div></div>' +
+        '<div class="step"><button data-a="dh:-1">−</button><div class="v">' + ar(cfg.doctorHealCount || 1) + '</div><button data-a="dh:1">+</button></div>' +
+        "</div></div>";
+    }
     h += '<div class="card"><div class="sw" data-a="toggleRoomChat"><div class="swl">' +
       '<span style="display:flex">💬</span><div><div class="swt">الشات في الأوضة</div><div class="sws">تسمح برسايل نصية بين اللاعبين</div></div></div>' +
       '<div class="knob' + (state.chatEnabled ? " on" : "") + '"><i></i></div></div></div>';
@@ -1742,7 +1749,7 @@ function revealScreen() {
     return h + "</div></div>";
   }
   var role = state.you.role, meta = ROLES[role] || ROLES.villager;
-  var desc = role === "doctor" ? "كل ليلة بتنقذ " + (state.doctorHeals === 2 ? "اتنين" : "واحد") + " — من غير ما تعرف مين اتضرب." : ROLE_DESC[role];
+  var desc = role === "doctor" ? "كل ليلة بتنقذ " + (state.doctorHeals === 3 ? "تلاتة" : state.doctorHeals === 2 ? "اتنين" : "واحد") + " — من غير ما تعرف مين اتضرب." : ROLE_DESC[role];
   return '<div class="mid"><div id="flip" class="flip">' +
     '<div class="flipin"><div class="face cover">' +
     '<svg width="112" height="112" viewBox="0 0 100 100"><rect x="22" y="22" width="56" height="56" fill="none" stroke="#E9A33C" stroke-opacity=".55" stroke-width="1.4"/>' +
@@ -2339,6 +2346,11 @@ appEl.addEventListener("click", async function (e) {
     var maxTh = Math.max(1, Math.floor((state.players.length - 1) / 2));
     var nv = Math.max(1, Math.min(maxTh, state.cfg.thieves + Number(parts[1])));
     client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { thieves: nv }) });
+    return;
+  }
+  if (k === "dh") {
+    var ndh = Math.max(1, Math.min(3, (state.cfg.doctorHealCount || 1) + Number(parts[1])));
+    client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { doctorHealCount: ndh }) });
     return;
   }
   if (k === "tg") {
