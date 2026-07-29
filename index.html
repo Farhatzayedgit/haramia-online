@@ -209,6 +209,7 @@ svg{display:block}
 .badges{display:flex;flex-wrap:wrap;gap:7px}
 .row2{display:flex;gap:9px}
 .row2 .btn{flex:1}
+.tapfx{filter:brightness(1.35) saturate(1.15) !important;transition:filter .05s ease}
 .lwrap{display:flex;gap:10px;max-width:900px;margin:10px auto;align-items:stretch;padding:0 6px}
 #app.lon{max-width:none}
 .lside{flex:0 0 160px;background:rgba(20,16,38,.6);border:1px solid rgba(255,255,255,.08);
@@ -548,14 +549,14 @@ function beginDay(s) {
   s.talkRound = 1;
   s.votes = {};
   s.nominated = null;
-  s.deadline = now() + s.cfg.talkSeconds * 1000;
+  s.deadline = null; // التايمر مقفول افتراضيًا — المضيف يشغّله يدويًا لو عايز
   return s;
 }
 
 function nextTalkRound(s) {
   if (s.talkRound < s.cfg.talkRounds) {
     s.talkRound += 1;
-    s.deadline = now() + s.cfg.talkSeconds * 1000;
+    s.deadline = null; // برضو مقفول للراوند الجديد
   } else beginVote(s);
   return s;
 }
@@ -643,6 +644,7 @@ function nightAction(s, playerId, payload) {
     if (me.role !== "thief") throw new Error("الدور مش عليك.");
     const t = findPlayer(s, payload.target);
     if (!t || !t.alive) throw new Error("اختار حد لسه في الدور.");
+    if (t.role === "thief") throw new Error("الحرامية مايضربوش بعض.");
     s.night.picks[playerId] = payload.target;
     const all = thievesAlive(s).every((p) => p.id in s.night.picks);
     if (!all) return { state: s, advanced: false };
@@ -939,7 +941,7 @@ else global.Engine = EngineExports;
     this.timer = this.backend.setTimer(function () {
       self.timer = null;
       try {
-        if (self.state.phase === "day") E.nextTalkRound(self.state);
+        if (self.state.phase === "day") { self.state.deadline = null; } // بيوقف بس، من غير ما يخطّي الطور
         else if (self.state.phase === "vote") self.finishVote();
         else return;
       } catch (e) { return; }
@@ -990,6 +992,12 @@ else global.Engine = EngineExports;
         case "start": { if (!isHost) return; E.startGame(s); break; }
         case "seen": { E.markSeen(s, id); break; }
         case "next": { if (!isHost || s.phase !== "day") return; E.nextTalkRound(s); break; }
+        case "startTimer": {
+          if (!isHost || s.phase !== "day") return;
+          var secs = Math.max(30, Math.min(120, Number(msg.seconds) || 60));
+          s.deadline = this.backend.now() + secs * 1000;
+          break;
+        }
         case "vote": {
           var r = E.castVote(s, id, msg.target === null || msg.target === undefined ? null : Number(msg.target));
           if (r.complete) this.finishVote();
@@ -1305,7 +1313,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v34-0727-2328";
+var BUILD_VERSION = "v36-0729-0622";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1630,14 +1638,24 @@ function revealScreen() {
     '<button class="btn dark" data-a="seen">حفظتها — يلا نبدأ</button>';
 }
 
+var dayTimerChoice = 60; // اختيار مدة التايمر قبل ما نشغّله (بالثواني)، من ٣٠ لـ١٢٠
+
 function dayScreen() {
   var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : null;
   var alive = state.players.filter(function (p) { return p.alive; });
   var h = '<p class="eb">راوند الكلام ' + ar(state.talkRound) + " من " + ar(state.talkRounds) + '</p><h1 class="t">اتكلّموا</h1>' +
     '<p class="d">كل واحد يقول رأيه ويدافع عن نفسه.</p>';
-  h += '<div class="mid ctr">' +
-    '<div class="timer"' + (left !== null && left < 15 ? ' style="color:var(--madder)"' : "") + ">" + mmss(left || 0) + "</div>" +
-    '<p class="d mt">في الدور ' + ar(alive.length) + " · طلعوا " + ar(state.players.length - alive.length) + "</p>" +
+  h += '<div class="mid ctr">';
+  if (state.deadline) {
+    h += '<div class="timer"' + (left !== null && left < 15 ? ' style="color:var(--madder)"' : "") + ">" + mmss(left || 0) + "</div>";
+  } else {
+    h += '<div class="timer" style="color:var(--faint);font-size:30px">🔒 مقفول</div>';
+    if (state.you.isHost) {
+      h += '<div class="step mt"><button data-a="dtimer:-15">−</button><div class="v">' + mmss(dayTimerChoice) + '</div><button data-a="dtimer:15">+</button></div>' +
+        '<button class="btn dark sm mt" data-a="startTimer">شغّل التايمر</button>';
+    }
+  }
+  h += '<p class="d mt">في الدور ' + ar(alive.length) + " · طلعوا " + ar(state.players.length - alive.length) + "</p>" +
     '<div class="emos">' + ["😂", "😱", "🤨", "👀", "🤥", "🫵", "🔪", "🙏", "❤️", "🤝"].map(function (e) { return '<button class="emo" data-emo="' + e + '">' + e + "</button>"; }).join("") + "</div></div>";
   if (state.you.isHost) h += '<button class="btn" data-a="next">' + (state.talkRound < state.talkRounds ? "الراوند اللي بعده" : "ابدأ التصويت") + "</button>";
   else h += '<p class="d ctr">مستنيين المضيف يكمّل…</p>';
@@ -1704,7 +1722,13 @@ function nightScreen() {
       '<div class="rn">' + esc(state.nominatedName || "-") + '</div><p class="d mt">تعالجه ويفضل معاكم، ولا يطلع؟</p></div>' +
       '<div class="stack"><button class="btn" data-a="heal:1">أعالجه</button><button class="btn dark" data-a="heal:0">مش هعالجه</button></div>';
   }
-  var alive = state.players.filter(function (p) { return p.alive && (step === "doctor" || p.id !== state.you.id); });
+  var alive = state.players.filter(function (p) {
+    if (!p.alive) return false;
+    if (step === "doctor") return true;
+    if (p.id === state.you.id) return false;
+    if (step === "thieves" && (state.you.partners || []).indexOf(p.name) !== -1) return false; // الحرامية مايضربوش بعض
+    return true;
+  });
   var multi = step === "doctor" ? state.doctorHeals : 1;
   return '<p class="eb">دورك دلوقتي</p><h1 class="t" style="color:' + meta.color + '">' + title + "</h1>" +
     '<p class="d" style="margin-bottom:12px">' + (multi > 1 ? "اختار " + ar(multi) + " تعالجهم" : "اختار واحد.") +
@@ -1968,6 +1992,20 @@ function gameLogHTML() {
   return '<div class="lside"><div class="lhead">📜 اللي حصل</div><div class="lbody">' + (rows || '<p class="d" style="font-size:11px">لسه مفيش أحداث…</p>') + "</div></div>";
 }
 
+// باج معروف وموثّق في سفاري آيفون: حالة :active مبتشتغلش خالص من غير
+// مستمع لمس فعلي على الصفحة. من غيره، كل تأثيرات الضغط اللي حطيناها
+// على الأزرار (بارز، بيغطس) كانت هتفضل مش ظاهرة على آيفون تحديدًا.
+document.addEventListener("touchstart", function () {}, { passive: true });
+
+// طبقة تأكيد إضافية: أي حاجة قابلة للدوس بتاخد ومضة واضحة لحظة الضغط،
+// بغض النظر عن :active — عشان الشخص يبقى متأكد ١٠٠٪ إنه داس صح.
+document.addEventListener("pointerdown", function (e) {
+  var el = e.target.closest("button, [data-a], [data-emo]");
+  if (!el) return;
+  el.classList.add("tapfx");
+  setTimeout(function () { el.classList.remove("tapfx"); }, 180);
+}, { passive: true });
+
 var appEl = document.getElementById("app");
 function render() {
   // لو أي خطأ حصل وقت بناء الشاشة، مننساش نحدّث الشاشة القديمة —
@@ -2079,6 +2117,8 @@ appEl.addEventListener("click", async function (e) {
     return;
   }
   if (k === "toggleRoomChat") { client.send({ t: "setChatEnabled", value: !state.chatEnabled }); return; }
+  if (k === "dtimer") { dayTimerChoice = Math.max(30, Math.min(120, dayTimerChoice + Number(parts[1]))); render(); return; }
+  if (k === "startTimer") { client.send({ t: "startTimer", seconds: dayTimerChoice }); return; }
   if (k === "start") { client.send({ t: "start" }); return; }
   if (k === "seen") { client.send({ t: "seen" }); return; }
   if (k === "next") { client.send({ t: "next" }); return; }
