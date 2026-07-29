@@ -1,0 +1,27 @@
+{
+  "name": "حرامية وأهل القرية أونلاين",
+  "short_name": "حرامية أونلاين",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#16122A",
+  "theme_color": "#16122A",
+  "lang": "ar",
+  "dir": "rtl",
+  "description": "لعبة اجتماعية أونلاين — حرامية وأهل القرية، بأسلوب مصري بالكامل",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
