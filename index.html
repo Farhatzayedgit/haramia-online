@@ -1313,7 +1313,7 @@ else global.Engine = EngineExports;
 "use strict";
 
 var OWNER = "فرحات زايد", YEAR = "٢٠٢٦", MAIL = "farhatzayed2018@gmail.com";
-var BUILD_VERSION = "v36-0729-0622";
+var BUILD_VERSION = "v37-0729-0641";
 var E = window.Engine, ROLES = E.ROLES, ROLE_DESC = E.ROLE_DESC;
 
 function ar(n) { return String(n).replace(/[0-9]/g, function(d){ return "٠١٢٣٤٥٦٧٨٩"[d]; }); }
@@ -1403,7 +1403,10 @@ function makeClient(name) {
         new Date().toTimeString().slice(0, 8) + " — !! تجاهلنا تحديث ناقص (مفيش فيه players/phase كاملين)");
       return;
     }
-    state = v; render();
+    state = v;
+    if (joinWaitTimer) { clearInterval(joinWaitTimer); joinWaitTimer = null; }
+    joinWaitStartedAt = null;
+    render();
   };
   client.onEmoji = function (m) { popEmoji(m.e); };
 }
@@ -1419,6 +1422,32 @@ function isHostStale() {
 }
 
 /* ---------------------------- عمليات ---------------------------- */
+/* ---------------------------- منع قفل الشاشة وقت اللعب ----------------------------
+ * لو الشاشة قفلت، المتصفح بيوقف الاتصال بفايربيز تمامًا — وده بالظبط اللي كان
+ * بيخلّي لاعبين جداد يفضلوا عالقين على "بنجهّز الأوضة" للأبد لو المستضيف قفلت
+ * شاشته. الحل: نمنع الشاشة من القفل طول ما إحنا جوه أوضة فعليًا. */
+var wakeLock = null;
+var joinWaitStartedAt = null;
+var joinWaitTimer = null;
+function startJoinWaitWatch() {
+  joinWaitStartedAt = Date.now();
+  if (joinWaitTimer) clearInterval(joinWaitTimer);
+  joinWaitTimer = setInterval(function () { if (!state) render(); else { clearInterval(joinWaitTimer); joinWaitTimer = null; } }, 1000);
+}
+async function keepAwake() {
+  try {
+    if (!("wakeLock" in navigator)) return;
+    wakeLock = await navigator.wakeLock.request("screen");
+  } catch (e) { /* بعض المتصفحات (خصوصًا القديمة) مش بتدعمها — نكمّل عادي من غيرها */ }
+}
+function releaseWakeLock() {
+  try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {}
+}
+document.addEventListener("visibilitychange", function () {
+  // الـwake lock بيتشال تلقائي لو التاب راح للخلفية — نرجّعه أول ما يرجع ظاهر
+  if (document.visibilityState === "visible" && client) keepAwake();
+});
+
 function doCreate() {
   if (!myName.trim()) return;
   localStorage.setItem("haramia-name", myName.trim());
@@ -1427,6 +1456,8 @@ function doCreate() {
   if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
   watchHostHeartbeat(client.code);
   saveSession();
+  keepAwake();
+  startJoinWaitWatch();
   render();
 }
 async function doJoin() {
@@ -1440,6 +1471,8 @@ async function doJoin() {
   client.joinRoom(code);
   watchHostHeartbeat(code);
   saveSession();
+  keepAwake();
+  startJoinWaitWatch();
   render();
 }
 async function doResume() {
@@ -1456,6 +1489,8 @@ async function doResume() {
   }
   watchHostHeartbeat(savedSession.code);
   saveSession();
+  keepAwake();
+  startJoinWaitWatch();
   render();
 }
 function doLeave() {
@@ -1464,6 +1499,9 @@ function doLeave() {
   client = null; state = null; lastMeta = null; hostStaleShown = false;
   chatOpen = false;
   clearSession();
+  releaseWakeLock();
+  if (joinWaitTimer) { clearInterval(joinWaitTimer); joinWaitTimer = null; }
+  joinWaitStartedAt = null;
   render();
 }
 
@@ -1510,7 +1548,15 @@ function view() {
       '<button class="btn dark" data-a="retry">جرّب تاني</button></div>' + footer();
   }
   if (!client) return homeScreen() + footer() + uiSheetHTML();
-  if (!state) return '<div class="mid ctr"><div class="spin"></div><p class="d" style="margin-top:16px">بنجهّز الأوضة…</p></div>' + footer();
+  if (!state) {
+    var waited = joinWaitStartedAt ? (Date.now() - joinWaitStartedAt) / 1000 : 0;
+    if (waited > 15) {
+      return '<div class="mid ctr"><div class="errbox">الأوضة مش بتردّ من شوية. يمكن الشخص اللي عمل الأوضة قفل شاشة موبايله أو نتّه اتقطع.</div>' +
+        '<button class="btn dark mt" data-a="retryJoin">جرّب تاني</button>' +
+        '<button class="btn ghost mt" data-a="leave">ارجع للصفحة الرئيسية</button></div>' + footer();
+    }
+    return '<div class="mid ctr"><div class="spin"></div><p class="d" style="margin-top:16px">بنجهّز الأوضة…</p></div>' + footer();
+  }
 
   var body = "";
   switch (state.phase) {
@@ -2100,6 +2146,15 @@ appEl.addEventListener("click", async function (e) {
   if (k === "join") { doJoin(); return; }
   if (k === "resume") { doResume(); return; }
   if (k === "leave") { doLeave(); return; }
+  if (k === "retryJoin") {
+    var wasHostRetry = client && client.isHost, codeRetry = client && client.code, nameRetry = myName;
+    doLeave();
+    myName = nameRetry;
+    if (wasHostRetry) { doCreate(); }
+    else if (codeRetry) { joinCode = codeRetry; doJoin(); }
+    else { render(); }
+    return;
+  }
   if (k === "about") { uiSheet = { t: "about" }; render(); return; }
 
   if (!client) return;
