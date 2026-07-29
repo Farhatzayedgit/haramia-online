@@ -534,7 +534,7 @@ function startGame(s) {
   s.missionStatus = "wait";
   s.missionShown = false;
   s.log = { outs: [], healed: [], votes: [] };
-  s.day = 1; s.talkRound = 1; s.votes = {}; s.nominated = null;
+  s.day = 1; s.talkRound = 1; s.votes = {}; s.nominated = null; s.runoff = null; s._tied = null;
   s.night = null; s.events = []; s.eventIdx = 0; s.result = null;
   s.phase = "reveal";
   s.deadline = null;
@@ -553,6 +553,7 @@ function beginDay(s) {
   s.talkRound = 1;
   s.votes = {};
   s.nominated = null;
+  s.runoff = null; s._tied = null;
   s.deadline = null; // التايمر مقفول افتراضيًا — المضيف يشغّله يدويًا لو عايز
   return s;
 }
@@ -569,30 +570,51 @@ function beginVote(s) {
   s.phase = "vote";
   s.voteOutcome = null;
   s.votes = {};
+  s.voteNonce = (s.voteNonce || 0) + 1;
   s.farewellSentThisRound = false;
   s.deadline = now() + s.cfg.voteSeconds * 1000;
   return s;
 }
 
-function castVote(s, voterId, targetId) {
+/** اللي ليهم حق يصوّتوا دلوقتي — في إعادة التعادل المتعادلين نفسهم مبيصوّتوش. */
+function runoffVoters(s) {
+  const excluded = (s.runoff && s.runoff.excludedVoters) || [];
+  return votingEligible(s).filter((p) => !excluded.includes(p.id));
+}
+
+/** targets ممكن تكون لستة (تصويت على أكتر من واحد)، أو رقم، أو null (امتناع). */
+function castVote(s, voterId, targets) {
   if (s.phase !== "vote") throw new Error("مش وقت تصويت دلوقتي.");
   const v = findPlayer(s, voterId);
   if (!v || !v.alive) throw new Error("اللي طلع برّا مبيصوّتش.");
   if (s.missionShown && v.role === "traitor") throw new Error("الخاين اتكشف، مبقاش ليه حق التصويت.");
-  if (targetId !== null) {
-    const t = findPlayer(s, targetId);
+  if (s.runoff && (s.runoff.excludedVoters || []).includes(voterId))
+    throw new Error("اللي عليهم أعلى الأصوات في التعادل مبيصوّتوش في الإعادة.");
+  const list = Array.isArray(targets) ? targets : (targets === null || targets === undefined ? [] : [targets]);
+  const clean = [];
+  list.forEach((raw) => {
+    if (raw === null || raw === undefined) return;
+    const tid = Number(raw);
+    const t = findPlayer(s, tid);
     if (!t || !t.alive) throw new Error("اللاعب ده مش في الدور.");
+    if (tid === voterId) throw new Error("مبتصوّتش على نفسك.");
     if (s.missionShown && t.role === "traitor") throw new Error("محدش يقدر يصوّت على الخاين بعد ما اتكشف.");
-  }
-  s.votes[voterId] = targetId;
-  const everyone = votingEligible(s).every((p) => p.id in s.votes);
+    if (s.runoff && !s.runoff.candidates.includes(tid)) throw new Error("في الإعادة بتصوّتوا بس على المتعادلين.");
+    if (!clean.includes(tid)) clean.push(tid);
+  });
+  s.votes[voterId] = clean;
+  const eligible = s.runoff ? runoffVoters(s) : votingEligible(s);
+  const everyone = eligible.every((p) => p.id in s.votes);
   return { state: s, complete: everyone };
 }
 
 function voteCounts(s) {
   const counts = {};
   votingEligible(s).forEach((p) => (counts[p.id] = 0));
-  Object.values(s.votes).forEach((t) => { if (t !== null && t in counts) counts[t] += 1; });
+  Object.values(s.votes).forEach((arr) => {
+    const list = Array.isArray(arr) ? arr : (arr === null || arr === undefined ? [] : [arr]);
+    list.forEach((t) => { if (t !== null && t in counts) counts[t] += 1; });
+  });
   return counts;
 }
 
@@ -607,10 +629,11 @@ function closeVote(s) {
   });
   s._counts = counts;
   s._rawVotes = { ...s.votes }; // نسخة من مين صوّت على مين — قبل ما votes يتصفّر للراوند الجاي
-  if (max === 0) { s.nominated = null; s.voteOutcome = "none"; return "none"; }
-  if (best.length > 1) { s.nominated = null; s.voteOutcome = "tie"; return "tie"; }
+  if (max === 0) { s.nominated = null; s.voteOutcome = "none"; s.runoff = null; s._tied = null; return "none"; }
+  if (best.length > 1) { s.nominated = null; s.voteOutcome = "tie"; s._tied = best.slice(); return "tie"; }
   s.nominated = best[0];
   s.voteOutcome = "ok";
+  s.runoff = null; s._tied = null;
   return "ok";
 }
 
@@ -631,6 +654,7 @@ const doctorHeals = (cfg) => Math.max(1, Math.min(3, Number(cfg.doctorHealCount)
 const doctorConfirmMode = (cfg) => !cfg.nightKill && !cfg.cop;
 
 function beginNight(s) {
+  s.runoff = null; s._tied = null;
   const order = nightOrder(s);
   if (!order.length) return resolveMorning(s);
   s.phase = "night";
@@ -774,11 +798,14 @@ function computeFunStats(s) {
   s.log.votes.forEach((v) => {
     const raw = v.raw || {};
     Object.keys(raw).forEach((voterId) => {
-      const targetId = raw[voterId];
-      if (targetId === null || targetId === undefined) return;
-      votesReceived[targetId] = (votesReceived[targetId] || 0) + 1;
-      const targetPlayer = findPlayer(s, Number(targetId));
-      if (targetPlayer && targetPlayer.role === "thief") correctVotes[voterId] = (correctVotes[voterId] || 0) + 1;
+      const a = raw[voterId];
+      const list = Array.isArray(a) ? a : (a === null || a === undefined ? [] : [a]);
+      list.forEach((targetId) => {
+        if (targetId === null || targetId === undefined) return;
+        votesReceived[targetId] = (votesReceived[targetId] || 0) + 1;
+        const targetPlayer = findPlayer(s, Number(targetId));
+        if (targetPlayer && targetPlayer.role === "thief") correctVotes[voterId] = (correctVotes[voterId] || 0) + 1;
+      });
     });
   });
   let mostSuspected = null, maxVotes = 0;
@@ -857,6 +884,8 @@ function viewFor(s, playerId) {
     voteCounts: s.phase === "morning" || s.phase === "over" ? (s.log.votes[s.log.votes.length - 1] || { counts: null }).counts : null,
     eventIdx: s.eventIdx,
     voteOutcome: s.voteOutcome || null,
+    voteNonce: s.voteNonce || 0,
+    runoff: s.runoff ? { candidates: s.runoff.candidates.slice(), excludedVoters: s.runoff.excludedVoters.slice() } : null,
     events: s.phase === "morning" || s.phase === "over"
       ? s.events.map((e) => ({
           kind: e.kind, saved: e.saved,
@@ -915,7 +944,11 @@ function dayTally(s, day, counts, raw, out) {
     tally: targets.map((targetId) => ({
       name: nameOf(targetId),
       count: counts[targetId],
-      voters: Object.keys(raw || {}).filter((voterId) => Number(raw[voterId]) === targetId).map((voterId) => nameOf(voterId)),
+      voters: Object.keys(raw || {}).filter((voterId) => {
+        const a = raw[voterId];
+        const list = Array.isArray(a) ? a : (a === null || a === undefined ? [] : [a]);
+        return list.map(Number).includes(targetId);
+      }).map((voterId) => nameOf(voterId)),
     })).sort((a, b) => b.count - a.count),
   };
 }
@@ -924,7 +957,7 @@ var EngineExports = {
   ROLES, ROLE_DESC, MISSIONS, DEFAULT_CFG,
   suggestCfg, validateCfg, makeCode, createRoom,
   addPlayer, removePlayer, startGame, markSeen, autoCfg,
-  beginDay, nextTalkRound, beginVote, castVote, voteCounts, closeVote,
+  beginDay, nextTalkRound, beginVote, castVote, voteCounts, closeVote, runoffVoters,
   beginNight, nightAction, resolveMorning, nextEvent, afterMorning, proceed,
   winner, viewFor, findPlayer, alivePlayers, doctorHeals, doctorConfirmMode,
   evalMission, pickMission, shuffle,
@@ -1059,7 +1092,7 @@ else global.Engine = EngineExports;
           break;
         }
         case "vote": {
-          var r = E.castVote(s, id, msg.target === null || msg.target === undefined ? null : Number(msg.target));
+          var r = E.castVote(s, id, msg.targets !== undefined ? msg.targets : msg.target);
           if (r.complete) this.finishVote();
           break;
         }
@@ -1067,7 +1100,17 @@ else global.Engine = EngineExports;
         case "tallyNext": { if (!isHost || s.phase !== "tally") return; E.beginNight(s); break; }
         case "revote": {
           if (!isHost || s.phase !== "tally") return;
-          s.votes = {}; delete s._counts; delete s._rawVotes;
+          s.votes = {}; delete s._counts; delete s._rawVotes; s.runoff = null; s._tied = null;
+          E.beginVote(s);
+          break;
+        }
+        case "runoff": {
+          if (!isHost || s.phase !== "tally" || s.voteOutcome !== "tie") return;
+          var cand = (s._tied || []).filter(function (cid) { var pp = E.findPlayer(s, cid); return pp && pp.alive; });
+          if (cand.length < 2) { E.beginNight(s); break; }
+          s.runoff = { candidates: cand.slice(), excludedVoters: cand.slice() };
+          if (!E.runoffVoters(s).length) { s.runoff = null; s._tied = null; E.beginNight(s); break; }
+          s.votes = {}; delete s._counts; delete s._rawVotes; s._tied = null;
           E.beginVote(s);
           break;
         }
@@ -1086,7 +1129,7 @@ else global.Engine = EngineExports;
           s.day = 0; s.events = []; s.eventIdx = 0; s.result = null;
           s.log = { outs: [], healed: [], votes: [] };
           s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
-          s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {};
+          s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {}; s.runoff = null; s._tied = null;
           break;
         }
         case "restart": {
@@ -1097,7 +1140,7 @@ else global.Engine = EngineExports;
           s.day = 0; s.events = []; s.eventIdx = 0; s.result = null;
           s.log = { outs: [], healed: [], votes: [] };
           s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
-          s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {};
+          s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {}; s.runoff = null; s._tied = null;
           E.startGame(s);
           break;
         }
@@ -1768,6 +1811,8 @@ function revealScreen() {
 
 var dayTimerChoice = 60; // اختيار مدة التايمر قبل ما نشغّله (بالثواني)، من ٣٠ لـ١٢٠
 var farewellTarget = null; // اللاعب المختار لإرسال السر ليه
+var voteSel = [];          // اللي أنا مختارهم دلوقتي في التصويت (قبل التأكيد)
+var voteKey = null;        // بيتغيّر كل جولة تصويت جديدة عشان نصفّر الاختيار
 
 function dayScreen() {
   var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : null;
@@ -1793,21 +1838,55 @@ function dayScreen() {
 
 function voteScreen() {
   var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : null;
-  var alive = state.players.filter(function (p) { return p.alive && !(state.missionShown && p.role === "traitor"); });
+  var ro = state.runoff;                              // معلومات إعادة التعادل (أو null)
   var iAmRevealedTraitor = state.missionShown && state.you.role === "traitor";
-  var canVote = state.you.alive && !iAmRevealedTraitor;
-  var myVote = state.you.myVote;
-  var h = '<p class="eb">التصويت · باقي ' + mmss(left || 0) + '</p><h1 class="t">' +
-    (iAmRevealedTraitor ? "اتكشفت كخاين" : state.you.alive ? "على مين شاكك؟" : "أنت برّا الدور") + "</h1>" +
-    '<p class="d" style="margin-bottom:12px">' +
-    (iAmRevealedTraitor ? "بعد ما اتكشفت، مبقاش ليك حق التصويت — بس شارك في الكلام وساعد أهل القرية عادي." :
-      state.you.alive ? "اختيارك سري لحد ما الكل يخلص." : "اتفرّج بس.") + "</p><div class=\"grid\">";
-  alive.filter(function (p) { return p.id !== state.you.id; }).forEach(function (p) {
-    h += '<button data-a="vote:' + p.id + '" class="pick' + (myVote === p.id ? " sel" : "") + '"' + (!canVote ? " disabled" : "") + ">" +
-      esc(p.name) + (p.voted ? '<div class="pickVoted">صوّت</div>' : "") + "</button>";
+  var iAmExcluded = !!(ro && ro.excludedVoters.indexOf(state.you.id) !== -1);
+  var canVote = state.you.alive && !iAmRevealedTraitor && !iAmExcluded;
+
+  // نصفّر الاختيار المحلي أول ما تبدأ جولة تصويت جديدة، ونبدأ من اللي أنا مأكّده قبل كده
+  if (voteKey !== state.voteNonce) {
+    voteKey = state.voteNonce;
+    voteSel = Array.isArray(state.you.myVote) ? state.you.myVote.slice() : [];
+  }
+  var submitted = Array.isArray(state.you.myVote); // أكّدت تصويتي في الجولة دي؟
+
+  // مين ينفع نصوّت عليهم: في الإعادة المتعادلين بس، غير كده كل اللي في الدور
+  var candIds = ro ? ro.candidates.slice() : state.players.filter(function (p) {
+    return p.alive && !(state.missionShown && p.role === "traitor");
+  }).map(function (p) { return p.id; });
+  var cands = candIds.map(function (cid) { return state.players.find(function (p) { return p.id === cid; }); })
+    .filter(function (p) { return p && p.id !== state.you.id; });
+
+  var title = iAmRevealedTraitor ? "اتكشفت كخاين"
+    : iAmExcluded ? "إنت من المتعادلين"
+    : !state.you.alive ? "أنت برّا الدور"
+    : ro ? "إعادة التصويت على المتعادلين"
+    : "على مين شاكك؟";
+  var sub = iAmRevealedTraitor ? "بعد ما اتكشفت، مبقاش ليك حق التصويت — بس شارك في الكلام وساعد أهل القرية عادي."
+    : iAmExcluded ? "إنت من اللي عليهم أعلى الأصوات، فمش هتصوّت في الإعادة — الباقي هم اللي هيحسموا."
+    : !state.you.alive ? "اتفرّج بس."
+    : ro ? "صوّت على واحد أو أكتر من المتعادلين، لحد ما حد يطلع."
+    : "تقدر تختار أكتر من واحد. اختيارك سري لحد ما الكل يخلص.";
+
+  var h = '<p class="eb">' + (ro ? "إعادة التصويت" : "التصويت") + " · باقي " + mmss(left || 0) + '</p><h1 class="t">' +
+    title + "</h1><p class=\"d\" style=\"margin-bottom:12px\">" + sub + "</p><div class=\"grid\">";
+
+  cands.forEach(function (p) {
+    var picked = voteSel.indexOf(p.id) !== -1;
+    h += '<button data-a="votePick:' + p.id + '" class="pick' + (picked ? " sel" : "") + '"' + (!canVote ? " disabled" : "") + ">" +
+      esc(p.name) + (picked ? '<div class="pickVoted">مختار</div>' : (p.voted ? '<div class="pickVoted">صوّت</div>' : "")) + "</button>";
   });
   h += "</div>";
-  if (canVote) h += '<button class="btn ghost mt" data-a="vote:null">' + (myVote === null ? "✓ ممتنع" : "أمتنع عن التصويت") + "</button>";
+
+  if (canVote) {
+    var n = voteSel.length;
+    var confirmLabel = submitted
+      ? (n ? "✓ اتأكّد (" + ar(n) + ") — عدّل وأكّد تاني" : "✓ ممتنع — عدّل وأكّد تاني")
+      : (n ? "أكّد التصويت (" + ar(n) + ")" : "أكّد الامتناع");
+    h += '<button class="btn mt" data-a="voteConfirm">' + confirmLabel + "</button>";
+    if (n) h += '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="voteClear">امسح اختياري</button>';
+    if (submitted) h += '<p class="d ctr mt" style="font-size:12.5px">تصويتك اتسجّل. تقدر تعدّله لحد ما التصويت يتقفل.</p>';
+  }
   if (state.you.isHost) h += '<button class="btn dark mt" data-a="forceVote">اقفل التصويت دلوقتي</button>';
   return h;
 }
@@ -1818,11 +1897,15 @@ function tallyScreen() {
   var h = '<p class="eb">نتيجة التصويت</p><h1 class="t">' +
     (t.outcome === "ok" ? esc(t.outName) + " أخد أعلى الأصوات" : t.outcome === "tie" ? "التصويت اتعادل" : "محدش صوّت") + "</h1>" +
     '<p class="d" style="margin-bottom:12px">' +
-    (t.outcome === "ok" ? "لسه محددناش هويته — استنوا الصباح." : "مفيش حد هيطلع النهارده من التصويت.") + "</p>";
+    (t.outcome === "ok" ? "لسه محددناش هويته — استنوا الصباح."
+      : t.outcome === "tie" ? "المتعادلين مش هيصوّتوا في الإعادة، والباقي هيختاروا من بينهم لحد ما حد يطلع."
+      : "مفيش حد هيطلع النهارده من التصويت.") + "</p>";
   h += '<div class="card">';
   if (!t.tally.length) h += '<p class="d">محدش صوّت النهارده.</p>';
+  var maxCount = t.tally.reduce(function (m, r) { return Math.max(m, r.count); }, 0);
   t.tally.forEach(function (r) {
-    h += '<div class="vr' + (r.name === t.outName ? " lead" : "") + '"><div class="nm">' + esc(r.name) +
+    var isLead = t.outcome === "tie" ? (r.count === maxCount && maxCount > 0) : (r.name === t.outName);
+    h += '<div class="vr' + (isLead ? " lead" : "") + '"><div class="nm">' + esc(r.name) +
       '<span style="display:block;font-size:11.5px;color:var(--muted);font-weight:500">' +
       (r.voters.length ? "صوّتوا عليه: " + esc(r.voters.join("، ")) : "") + "</span></div>" +
       '<div class="c">' + ar(r.count) + "</div></div>";
@@ -1844,10 +1927,16 @@ function tallyScreen() {
   }
 
   if (state.you.isHost) {
-    h += '<button class="btn mt" data-a="tallyNext">كمّلوا</button>' +
-      '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="revote">صوّتوا تاني</button>';
+    if (t.outcome === "tie") {
+      h += '<button class="btn mt" data-a="runoff">أعيدوا التصويت على المتعادلين</button>' +
+        '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="tallyNext">محدش يطلع النهارده · كمّلوا</button>';
+    } else {
+      h += '<button class="btn mt" data-a="tallyNext">كمّلوا</button>' +
+        '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="revote">صوّتوا تاني</button>';
+    }
   } else {
-    h += '<p class="d ctr mt">مستنيين المضيف يكمّل أو يعيد التصويت…</p>';
+    h += '<p class="d ctr mt">' +
+      (t.outcome === "tie" ? "في تعادل — مستنيين المضيف يعيد التصويت على المتعادلين…" : "مستنيين المضيف يكمّل أو يعيد التصويت…") + "</p>";
   }
   return h;
 }
@@ -1886,6 +1975,15 @@ function nightScreen() {
 
 var nightPicks = [];
 function morningScreen() {
+  // مفيش أي أحداث (تعادل من غير ضرب ليل، أو الكل اتعالج) — نعرض شاشة واضحة بدل ما نعلّق
+  if (!state.events || state.events.length === 0) {
+    var he = '<p class="eb">صباح اليوم ' + ar(state.day) + '</p><div class="mid ctr">' +
+      ctrEmblem("villager", 58, "var(--faint)") +
+      '<h1 class="t mt">محدش طلع النهارده</h1>' +
+      '<p class="d" style="margin-bottom:12px">عدّت الليلة بالسلامة — مفيش حد خرج من الدور.</p></div>';
+    he += state.you.isHost ? '<button class="btn" data-a="morningNext">كمّلوا</button>' : '<p class="d ctr">مستنيين المضيف…</p>';
+    return he;
+  }
   if (state.eventIdx >= state.events.length) return '<div class="mid ctr"><div class="spin"></div></div>';
   var e = state.events[state.eventIdx];
   if (e.kind === "rami") {
@@ -2365,10 +2463,19 @@ appEl.addEventListener("click", async function (e) {
   if (k === "start") { client.send({ t: "start" }); return; }
   if (k === "seen") { client.send({ t: "seen" }); return; }
   if (k === "next") { client.send({ t: "next" }); return; }
-  if (k === "vote") { client.send({ t: "vote", target: parts[1] === "null" ? null : Number(parts[1]) }); return; }
+  if (k === "votePick") {
+    var vid = Number(parts[1]);
+    var pos = voteSel.indexOf(vid);
+    if (pos === -1) voteSel.push(vid); else voteSel.splice(pos, 1);
+    render();
+    return;
+  }
+  if (k === "voteClear") { voteSel = []; render(); return; }
+  if (k === "voteConfirm") { client.send({ t: "vote", targets: voteSel.slice() }); return; }
   if (k === "forceVote") { client.send({ t: "forceVote" }); return; }
   if (k === "tallyNext") { client.send({ t: "tallyNext" }); return; }
   if (k === "revote") { client.send({ t: "revote" }); return; }
+  if (k === "runoff") { client.send({ t: "runoff" }); return; }
   if (k === "fwPick") { farewellTarget = Number(parts[1]); render(); return; }
   if (k === "fwCancel") { farewellTarget = null; render(); return; }
   if (k === "fwSend") {
