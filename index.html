@@ -265,7 +265,7 @@ const ROLES = {
   doctor:   { key: "doctor",   label: "دكتور",    team: "village", color: "#CFE8E1", ink: "#12302B" },
   cop:      { key: "cop",      label: "ضابط",     team: "village", color: "#E9A33C", ink: "#221602" },
   traitor:  { key: "traitor",  label: "خاين",     team: "solo",    color: "#9B6BD6", ink: "#180B2B" },
-  rami:     { key: "rami",     label: "الرامي",   team: "village", color: "#4A7FD9", ink: "#0B1C33" },
+  rami:     { key: "rami",     label: "الرصاصة الأخيرة",   team: "village", color: "#4A7FD9", ink: "#0B1C33" },
 };
 
 const ROLE_DESC = {
@@ -274,16 +274,17 @@ const ROLE_DESC = {
   doctor: "كل ليلة بتنقذ حد — من غير ما تعرف مين اللي اتضرب.",
   cop: "كل ليلة بتضرب واحد بتشك فيه. لو غلطت، تبقى خسّرت بريء.",
   traitor: "مالكش صف. عندك مهمة سرية لازم تعملها — محدش يعرفك، ولو فشلت هتتفضح.",
-  rami: "معاك رمية وحيدة طول اللعبة. بالليل تقدر تتهم حد اتهام نهائي: لو صح، يطلع فورًا. لو غلطت، إنت اللي هتطلع بدله.",
+  rami: "إنت من أهل القرية ومعاك رصاصة واحدة بس طول اللعبة. بالليل تقدر تضرب حد بيها: لو طلع حرامي، يطلع فورًا. لو طلع من أهل القرية، إنت اللي تطلع بدله. مفيش هوية بتتكشف إلا لما حد يطلع — فاستخدمها بحساب.",
 };
 
 const DEFAULT_CFG = {
   thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false, doctorHealCount: 1,
+  lastMessage: true,
   talkSeconds: 120, voteSeconds: 60, talkRounds: 2,
 };
 
 function suggestCfg(n) {
-  const base = { talkSeconds: 120, voteSeconds: 60, talkRounds: 2 };
+  const base = { talkSeconds: 120, voteSeconds: 60, talkRounds: 2, lastMessage: true };
   if (n <= 5) return { ...base, thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false };
   if (n <= 7) return { ...base, thieves: 2, doctor: true, cop: false, traitor: false, nightKill: false };
   if (n <= 8) return { ...base, thieves: 2, doctor: true, cop: true, traitor: false, nightKill: true };
@@ -861,7 +862,7 @@ function viewFor(s, playerId) {
     chat: s.chat || [],
     chatEnabled: s.chatEnabled !== false,
     farewellForMe: s.farewell && s.farewell.to === (me && me.id) ? { fromName: (findPlayer(s, s.farewell.from) || {}).name || "؟", text: s.farewell.text } : null,
-    canSendFarewell: s.phase === "tally" && !!me && me.id === s.nominated && !s.farewellSentThisRound,
+    canSendFarewell: s.phase === "tally" && s.cfg.lastMessage !== false && !!me && me.id === s.nominated && !s.farewellSentThisRound,
     day: s.day,
     talkRound: s.talkRound,
     talkRounds: s.cfg.talkRounds,
@@ -1145,6 +1146,7 @@ else global.Engine = EngineExports;
           break;
         }
         case "farewell": {
+          if (s.cfg.lastMessage === false) return;
           if (s.phase !== "tally" || id !== s.nominated || s.farewellSentThisRound) return;
           var toP = E.findPlayer(s, Number(msg.to));
           if (!toP || toP.id === id) return;
@@ -1747,8 +1749,11 @@ function lobbyScreen() {
       toggleRow("doctor", cfg.doctor, "الدكتور", "بينقذ اللي اتضرب") +
       toggleRow("cop", cfg.cop, "الضابط", "بيضرب كل ليلة واحد بيشك فيه") +
       toggleRow("traitor", cfg.traitor, "الخاين", "بياخد مهمة سرية") +
-      toggleRow("rami", cfg.rami, "الرامي", "معاه رمية وحيدة — اتهام نهائي بالليل") +
+      toggleRow("rami", cfg.rami, "الرصاصة الأخيرة", "من أهل القرية ومعاه رصاصة واحدة يضرب بيها حد بالليل") +
       toggleRow("thief", cfg.nightKill, "الحرامية بيضربوا بالليل", "لو مقفول، بيكسبوا بالتصويت بس", "nightKill") +
+      '<div class="sw" data-a="tg:lastMessage"><div class="swl">' +
+      '<span style="display:flex">✉️</span><div><div class="swt">الرسالة الأخيرة</div><div class="sws">اللي يطلع بالتصويت يبعت رسالة سرية لواحد قبل ما يمشي</div></div></div>' +
+      '<div class="knob' + (cfg.lastMessage !== false ? " on" : "") + '"><i></i></div></div>' +
       "</div>";
     if (cfg.doctor) {
       h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
@@ -1762,6 +1767,7 @@ function lobbyScreen() {
     h += '<div class="soft"><div class="badges">' + badge(ar(cfg.thieves) + " حرامية", ROLES.thief.color) +
       (cfg.doctor ? badge("دكتور", ROLES.doctor.color) : "") + (cfg.cop ? badge("ضابط", ROLES.cop.color) : "") +
       (cfg.traitor ? badge("خاين", ROLES.traitor.color) : "") +
+      (cfg.rami ? badge("الرصاصة الأخيرة", ROLES.rami.color) : "") +
       badge(villagers > 0 ? ar(villagers) + " أهل قرية" : "مفيش أهل قرية", ROLES.villager.color) + "</div></div>";
     h += '<button class="btn mt" data-a="start"' + (n < 3 || villagers < 1 ? " disabled" : "") + ">" +
       (n < 3 ? "مستنيين " + ar(3 - n) + " كمان" : villagers < 1 ? "الأدوار كتير على العدد ده" : "ابدأ اللعبة") + "</button>";
@@ -1914,12 +1920,12 @@ function tallyScreen() {
 
   if (state.canSendFarewell) {
     var others = state.players.filter(function (p) { return p.id !== state.you.id && p.alive; });
-    h += '<div class="card mt"><p class="eb">قبل ما تطلع…</p><p class="d" style="margin-bottom:10px">عايز تقول سر لحد؟ هيوصله هو بس، محدش تاني هيشوفه.</p>';
+    h += '<div class="card mt"><p class="eb">الرسالة الأخيرة</p><p class="d" style="margin-bottom:10px">قبل ما تمشي، تقدر تبعت رسالة سرية لواحد من اللي لسه في الدور — هيوصله هو بس، محدش تاني هيشوفها.</p>';
     if (farewellTarget === null) {
       h += '<div class="grid">' + others.map(function (p) { return '<button data-a="fwPick:' + p.id + '" class="pick">' + esc(p.name) + "</button>"; }).join("") + "</div>";
     } else {
       var tname = (others.find(function (p) { return p.id === farewellTarget; }) || {}).name || "";
-      h += '<p class="d" style="margin-bottom:8px">هتقول سر لـ <b style="color:var(--saffron)">' + esc(tname) + "</b></p>" +
+      h += '<p class="d" style="margin-bottom:8px">هتبعت رسالتك الأخيرة لـ <b style="color:var(--saffron)">' + esc(tname) + "</b></p>" +
         '<input class="input" id="fwText" placeholder="اكتب رسالتك…" maxlength="150">' +
         '<div class="row2 mt"><button class="btn" data-a="fwSend">ابعت</button><button class="btn ghost" data-a="fwCancel">رجّع</button></div>';
     }
@@ -1944,7 +1950,7 @@ function tallyScreen() {
 function nightScreen() {
   var step = state.nightStep;
   var meta = { thieves: ROLES.thief, cop: ROLES.cop, doctor: ROLES.doctor, rami: ROLES.rami }[step] || ROLES.villager;
-  var title = { thieves: "دور الحرامية", cop: "دور الضابط", doctor: "دور الدكتور", rami: "دور الرامي" }[step];
+  var title = { thieves: "دور الحرامية", cop: "دور الضابط", doctor: "دور الدكتور", rami: "دور الرصاصة الأخيرة" }[step];
   if (!state.myTurn) {
     return '<div class="mid ctr">' + ctrEmblem("villager", 58, "var(--faint)") +
       '<h1 class="t mt">الليل</h1><p class="d" style="max-width:280px;margin:0 auto">غمّض عينيك. ' + title + " دلوقتي — استنى لحد الصبح.</p></div>";
@@ -1964,12 +1970,12 @@ function nightScreen() {
   });
   var multi = step === "doctor" ? state.doctorHeals : 1;
   var h = '<p class="eb">دورك دلوقتي</p><h1 class="t" style="color:' + meta.color + '">' + title + "</h1>" +
-    '<p class="d" style="margin-bottom:12px">' + (step === "rami" ? "دي رمية وحيدة طول اللعبة — استخدمها بحذر، أو سيبها لبعدين." :
+    '<p class="d" style="margin-bottom:12px">' + (step === "rami" ? "معاك رصاصة واحدة بس طول اللعبة — لو ضربت حرامي يطلع، ولو ضربت من أهل القرية تطلع إنت. استخدمها بحذر، أو سيبها لبعدين." :
       multi > 1 ? "اختار " + ar(multi) + " تعالجهم" : "اختار واحد.") +
     (step === "thieves" && (state.you.partners || []).length ? "  ·  معاك " + esc(state.you.partners.join(" و")) : "") + "</p>" +
     '<div class="grid" id="nightGrid">' + alive.map(function (p) { return '<button data-a="npick:' + p.id + '" class="pick">' + esc(p.name) + "</button>"; }).join("") + "</div>" +
     '<button class="btn mt" id="nightGo" data-a="nightGo" disabled>خلاص — غمّض</button>';
-  if (step === "rami") h += '<button class="btn ghost mt" data-a="nightSkip">مش دلوقتي — سيب الرمية لبعدين</button>';
+  if (step === "rami") h += '<button class="btn ghost mt" data-a="nightSkip">مش دلوقتي — سيب الرصاصة لبعدين</button>';
   return h;
 }
 
@@ -1990,9 +1996,12 @@ function morningScreen() {
     var h2 = '<p class="eb">صباح اليوم ' + ar(state.day) + "</p><div class=\"mid ctr\">" +
       '<p class="d">' + ar(state.eventIdx + 1) + " من " + ar(state.events.length) + "</p>";
     h2 += '<div style="margin:12px 0">' + ctrEmblem("rami", 58, "var(--saffron)") + "</div>";
-    h2 += '<h1 class="t">الرامي اتهم ' + esc(e.accusedName || "حدّ") + "</h1>";
-    if (e.correct) h2 += '<p class="d" style="margin-bottom:12px">وكان صح! ' + esc(e.accusedName || "") + " كان بينهم فعلًا، وطلع برّا الدور فورًا.</p>";
-    else h2 += '<p class="d" style="margin-bottom:12px">بس غلط… ' + esc(e.accuserName || "الرامي") + " هو اللي طلع بدله.</p>";
+    h2 += '<h1 class="t">الرصاصة الأخيرة ضربت ' + esc(e.accusedName || "حدّ") + "</h1>";
+    var outName = e.correct ? e.accusedName : e.accuserName;
+    var rmb = e.role ? ROLES[e.role] : null;
+    if (e.correct) h2 += '<p class="d" style="margin-bottom:12px">' + esc(e.accusedName || "") + " كان حرامي فعلًا، وطلع برّا الدور فورًا.</p>";
+    else h2 += '<p class="d" style="margin-bottom:12px">بس طلع بريء… ' + esc(e.accuserName || "صاحب الرصاصة") + " هو اللي طلع بدله.</p>";
+    if (rmb) h2 += '<p class="d">هوية ' + esc(outName || "اللي طلع") + ' كانت</p><div class="chip" style="background:' + rmb.color + ";color:" + rmb.ink + '">' + rmb.label + "</div>";
     h2 += "</div>";
     h2 += state.you.isHost ? '<button class="btn" data-a="morningNext">التالي</button>' : '<p class="d ctr">مستنيين المضيف…</p>';
     return h2;
@@ -2085,12 +2094,19 @@ function uiSheetHTML() {
   if (!uiSheet) return "";
   if (uiSheet.t === "about") {
     var h = '<div class="sheet" data-a="closeSheet"><div class="sheetin" data-stop="1"><p class="eb">الأدوار</p>';
-    ["thief", "villager", "doctor", "cop", "traitor"].forEach(function (r) {
+    ["thief", "villager", "doctor", "cop", "traitor", "rami"].forEach(function (r) {
       h += '<div style="display:flex;gap:11px;padding:12px 0;border-bottom:1px solid var(--line)">' +
         '<span style="display:flex;flex:none;margin-top:2px;color:' + ROLES[r].color + '">' + emblem(r, 26, ROLES[r].color) + "</span>" +
         '<div><div style="font-weight:800;font-size:16px;color:' + ROLES[r].color + '">' + ROLES[r].label + '</div>' +
         '<div style="font-size:13.5px;color:var(--muted);line-height:1.65">' + ROLE_DESC[r] + "</div></div></div>";
     });
+    h += '<p class="eb" style="margin-top:18px">قواعد مهمة</p>' +
+      '<div style="font-size:13.5px;color:var(--muted);line-height:1.7">' +
+      '• <b style="color:var(--parch)">الكشف عن الهوية:</b> مفيش حد بتتكشف هويته وهو لسه في الدور بيلعب — الهوية بتظهر بس لما اللاعب يطلع برّا (بالتصويت أو الليل أو الرصاصة الأخيرة).<br>' +
+      '• <b style="color:var(--parch)">التعادل:</b> لو الأصوات اتعادلت، بتتعمل إعادة على المتعادلين بس، والمتعادلين نفسهم مبيصوّتوش فيها، لحد ما حد يطلع.<br>' +
+      '• <b style="color:var(--parch)">التصويت:</b> تقدر تصوّت على أكتر من واحد في نفس الجولة، وبعدها تأكّد.<br>' +
+      '• <b style="color:var(--parch)">الرسالة الأخيرة:</b> لو مفعّلة، اللي يطلع بالتصويت يقدر يبعت رسالة سرية لواحد بس من اللي لسه في الدور، قبل ما يمشي.' +
+      "</div>";
     h += '<p class="eb" style="margin-top:18px">اللعب أونلاين</p><p class="d" style="font-size:14px">كل واحد بيفتح نفس اللينك على موبايله، ويكتب كود الأوضة. اللي عامل "استضافة" لازم يسيب التطبيق فاتح لحد ما اللعبة تخلص.</p>';
     h += '<button class="btn dark sm mt" data-a="closeSheet">اقفل</button></div></div>';
     return h;
@@ -2361,7 +2377,7 @@ function renderFarewellModal() {
   host.innerHTML = '<div style="max-width:340px;width:100%;background:linear-gradient(160deg,#2E2758,#191430);' +
     'border:1px solid rgba(233,163,60,.35);border-radius:20px;padding:22px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.5)">' +
     '<div style="font-size:34px;margin-bottom:8px">🤫</div>' +
-    '<p style="font-family:var(--body);font-weight:800;font-size:13px;color:var(--saffron);margin:0 0 4px">' + esc(fw.fromName) + ' قالك سر قبل ما يطلع</p>' +
+    '<p style="font-family:var(--body);font-weight:800;font-size:13px;color:var(--saffron);margin:0 0 4px">' + esc(fw.fromName) + ' بعتلك الرسالة الأخيرة قبل ما يطلع</p>' +
     '<p style="font-size:15px;line-height:1.6;color:var(--parch);margin:14px 0;font-weight:700">' + esc(fw.text) + '</p>' +
     '<button class="btn dark" data-a="fwSeen" style="margin-top:6px">تمام</button></div>';
   document.body.appendChild(host);
