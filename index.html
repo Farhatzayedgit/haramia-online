@@ -283,7 +283,7 @@ const ROLE_DESC = {
 
 const DEFAULT_CFG = {
   thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false, doctorHealCount: 1,
-  lastMessage: true, villagersToWin: 2,
+  lastMessage: true, villagersToWin: 2, villagersToTie: 1,
   talkSeconds: 120, voteSeconds: 60, talkRounds: 2,
 };
 
@@ -420,6 +420,19 @@ const votingEligible = (s) => alivePlayers(s).filter((p) => !(s.missionShown && 
 const findPlayer = (s, id) => s.players.find((p) => p.id === id) || null;
 const roleOf = (s, id) => { const p = findPlayer(s, id); return p ? p.role : null; };
 const thievesAlive = (s) => alivePlayers(s).filter((p) => p.role === "thief");
+
+/** حالة "التعادل": فاضل كام من أهل القرية عشان الحرامية يكسبوا، وهل وصلنا لحد التنبيه */
+function tieState(s) {
+  const totalNonThieves = s.players.filter((p) => p.role !== "thief").length;
+  const goalRaw = Number(s.cfg.villagersToWin) || 0;
+  if (goalRaw <= 0 || !totalNonThieves) return { reached: false, remaining: null, out: 0, goal: 0 };
+  const goal = Math.min(goalRaw, totalNonThieves);
+  const out = s.players.filter((p) => !p.alive && p.role !== "thief").length;
+  const remaining = goal - out;
+  const tieAt = Math.max(1, Math.min(5, Number(s.cfg.villagersToTie) || 1));
+  // التنبيه بيشتغل لما نوصل لعدد الخارجين المحدد، وطول ما اللعبة لسه شغّالة
+  return { reached: out >= tieAt && remaining > 0, remaining, out, goal };
+}
 
 function winner(s) {
   const alive = alivePlayers(s);
@@ -909,6 +922,12 @@ function viewFor(s, playerId) {
     eventIdx: s.eventIdx,
     voteOutcome: s.voteOutcome || null,
     voteNonce: s.voteNonce || 0,
+    tieAlert: (function () {
+      if (s.phase === "lobby" || s.phase === "reveal" || s.phase === "over") return null;
+      const t = tieState(s);
+      if (!t.reached) return null;
+      return { remaining: t.remaining, iAmThief: !!iAmThief };
+    })(),
     runoff: s.runoff ? { candidates: s.runoff.candidates.slice(), excludedVoters: s.runoff.excludedVoters.slice() } : null,
     events: s.phase === "morning" || s.phase === "over"
       ? s.events.map((e) => ({
@@ -983,7 +1002,7 @@ var EngineExports = {
   addPlayer, removePlayer, startGame, markSeen, autoCfg,
   beginDay, nextTalkRound, beginVote, castVote, voteCounts, closeVote, runoffVoters,
   beginNight, nightAction, resolveMorning, nextEvent, afterMorning, proceed,
-  winner, viewFor, findPlayer, alivePlayers, doctorHeals, doctorConfirmMode,
+  winner, tieState, viewFor, findPlayer, alivePlayers, doctorHeals, doctorConfirmMode,
   evalMission, pickMission, shuffle,
   setClock: (fn) => { now = fn; },
 };
@@ -1099,6 +1118,7 @@ else global.Engine = EngineExports;
           merged.talkRounds = Math.max(1, Math.min(4, Number(merged.talkRounds) || 2));
           merged.doctorHealCount = Math.max(1, Math.min(3, Number(merged.doctorHealCount) || 1));
           merged.villagersToWin = Math.max(1, Math.min(5, Number(merged.villagersToWin) || 1));
+          merged.villagersToTie = Math.max(1, Math.min(5, Number(merged.villagersToTie) || 1));
           s.cfg = merged;
           break;
         }
@@ -1817,7 +1837,8 @@ function view() {
     case "over": body = overScreen(); break;
     default: body = '<div class="mid ctr"><div class="spin"></div></div>';
   }
-  return netBar() + body + footer() + uiSheetHTML();
+  var banner = (state.phase === "day" || state.phase === "vote" || state.phase === "tally") ? tieBannerHTML() : "";
+  return netBar() + banner + body + footer() + uiSheetHTML();
 }
 
 function homeScreen() {
@@ -1853,6 +1874,7 @@ function lobbyScreen() {
   var nonThieves = Math.max(1, n - cfg.thieves);           // كل اللي مش حرامي
   var vwMax = Math.min(5, nonThieves);
   var vwVal = Math.max(1, Math.min(vwMax, cfg.villagersToWin || 1));
+  var vtVal = Math.max(1, Math.min(5, cfg.villagersToTie || 1));
   var h = '<div class="fade">';
   h += '<p class="eb">كود الأوضة — ابعته لأصحابك</p><div class="codebig">' + esc(state.code) + "</div>" +
     '<p class="codehint">هما هيفتحوا نفس اللينك ويكتبوا الكود ده</p></div>';
@@ -1877,6 +1899,10 @@ function lobbyScreen() {
     h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
       ctrEmblem("villager", 26, "var(--teal)") + '<div><div class="swt">كام أهل قرية يخرجوا عشان الحرامية يكسبوا</div><div class="sws">من ١ لـ' + ar(vwMax) + ' — كل اللي مش حرامي محسوب أهل قرية</div></div></div>' +
       '<div class="step"><button data-a="vw:-1">−</button><div class="v">' + ar(vwVal) + '</div><button data-a="vw:1">+</button></div>' +
+      "</div></div>";
+    h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
+      '<span style="display:flex;font-size:22px">⚠️</span><div><div class="swt">تنبيه التعادل بعد خروج كام أهل قرية</div><div class="sws">من ١ لـ٥ — لما يوصلوا للعدد ده، إشعار بيوصل للكل</div></div></div>' +
+      '<div class="step"><button data-a="vt:-1">−</button><div class="v">' + ar(vtVal) + '</div><button data-a="vt:1">+</button></div>' +
       "</div></div>";
     h += '<div class="card">' +
       toggleRow("doctor", cfg.doctor, "الدكتور", "بينقذ اللي اتضرب") +
@@ -2011,9 +2037,19 @@ function voteScreen() {
   var h = '<p class="eb">' + (ro ? "إعادة التصويت" : "التصويت") + " · باقي " + mmss(left || 0) + '</p><h1 class="t">' +
     title + "</h1><p class=\"d\" style=\"margin-bottom:12px\">" + sub + "</p><div class=\"grid\">";
 
+  // العدد اللي بيبان = أصوات الناس المؤكّدة، بس محسوب عليها اختياري الحالي فورًا
+  // (حتى قبل ما أدوس "أكّد")، فلو شلت اختياري الرقم بينقص على طول.
+  var myConfirmed = Array.isArray(state.you.myVote) ? state.you.myVote : [];
+  function liveCount(p) {
+    var c = p.votesOn || 0;
+    if (myConfirmed.indexOf(p.id) !== -1) c -= 1;   // شيل صوتي المؤكّد القديم
+    if (voteSel.indexOf(p.id) !== -1) c += 1;       // وحط اختياري الحالي مكانه
+    return Math.max(0, c);
+  }
+
   cands.forEach(function (p) {
     var picked = voteSel.indexOf(p.id) !== -1;
-    var vc = p.votesOn || 0;
+    var vc = liveCount(p);
     h += '<button data-a="votePick:' + p.id + '" class="pick' + (picked ? " sel" : "") + '"' + (!canVote ? " disabled" : "") + ">" +
       '<span class="vcount' + (vc ? "" : " zero") + '">' + ar(vc) + "</span>" +
       esc(p.name) + (picked ? '<div class="pickVoted">مختار</div>' : (p.voted ? '<div class="pickVoted">صوّت</div>' : "")) + "</button>";
@@ -2239,6 +2275,7 @@ function uiSheetHTML() {
     h += '<p class="eb" style="margin-top:18px">قواعد مهمة</p>' +
       '<div style="font-size:13.5px;color:var(--muted);line-height:1.7">' +
       '• <b style="color:var(--parch)">المكسب:</b> أهل القرية يكسبوا لما يمسكوا كل الحرامية. الحرامية يكسبوا لما يخرج العدد اللي المضيف حدّده من أهل القرية — وكل اللي مش حرامي (الخاين والدكتور والضابط والرصاصة الأخيرة وغيرهم) محسوب على أهل القرية.<br>' +
+      '• <b style="color:var(--parch)">تنبيه التعادل:</b> لما يخرج العدد اللي المضيف حدّده من أهل القرية، إشعار بيوصل للكل إن الدور بقى متعادل وفاضل كام واحد بس على مكسب الحرامية.<br>' +
       '• <b style="color:var(--parch)">الكشف عن الهوية:</b> مفيش حد بتتكشف هويته وهو لسه في الدور بيلعب — الهوية بتظهر بس لما اللاعب يطلع برّا (بالتصويت أو الليل أو الرصاصة الأخيرة).<br>' +
       '• <b style="color:var(--parch)">التعادل:</b> لو الأصوات اتعادلت، بتتعمل إعادة على المتعادلين بس، والمتعادلين نفسهم مبيصوّتوش فيها، لحد ما حد يطلع.<br>' +
       '• <b style="color:var(--parch)">التصويت:</b> تقدر تصوّت على أكتر من واحد في نفس الجولة، وبعدها تأكّد.<br>' +
@@ -2506,6 +2543,7 @@ function render() {
     if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
     if (!showLandscape) renderChatPanel(); // في العرض العريض الشات ظاهر جوه العمود مش عايم
     renderFarewellModal();
+    renderTieModal();
     renderNightTask();
     updateSfx();
     renderMoreButton();
@@ -2662,6 +2700,50 @@ function startOrderTask(area, addScore) {
 }
 
 
+/* ------------------------- إشعار التعادل ------------------------- */
+var tieModalKey = null; // عشان الإشعار يظهر مرة واحدة بس لكل حالة
+
+function tieBannerHTML() {
+  var ta = state && state.tieAlert;
+  if (!ta) return "";
+  var msg = ta.iAmThief
+    ? "فاضلكم " + ar(ta.remaining) + " بس وتكسبوا — ركّزوا!"
+    : "خلّوا بالكم — باقي " + ar(ta.remaining) + " بس والحرامية تكسب!";
+  return '<div style="display:flex;align-items:center;gap:9px;border-radius:14px;padding:10px 12px;margin-bottom:10px;' +
+    "background:linear-gradient(180deg,rgba(209,72,63,.25),rgba(209,72,63,.1));border:1px solid rgba(209,72,63,.45)\">" +
+    '<span style="font-size:19px">⚠️</span><div style="font-size:13px;font-weight:800;color:var(--parch);line-height:1.5">' +
+    esc(msg) + "</div></div>";
+}
+
+function renderTieModal() {
+  var ta = state && state.tieAlert;
+  var host = document.getElementById("tieModal");
+  if (!ta) { tieModalKey = null; if (host) host.remove(); return; }
+  var key = "tie-" + ta.remaining + "-" + (ta.iAmThief ? "t" : "v");
+  if (key === tieModalKey) return;   // اتعرض خلاص للحالة دي
+  tieModalKey = key;
+  if (host) host.remove();
+  sfx("traitor");
+  buzz(60);
+  host = document.createElement("div");
+  host.id = "tieModal";
+  host.style.cssText = "position:fixed;inset:0;z-index:210;display:flex;align-items:center;justify-content:center;" +
+    "background:rgba(8,6,16,.75);padding:20px";
+  var title = ta.iAmThief ? "إنتوا قربتوا تكسبوا!" : "خلّوا بالكم — إنتوا في خطر!";
+  var body = ta.iAmThief
+    ? "الدور بقى متعادل. فاضلكم <b>" + ar(ta.remaining) + "</b> بس من أهل القرية وتكسبوا. ركّزوا."
+    : "الدور بقى متعادل. باقي <b>" + ar(ta.remaining) + "</b> بس من أهل القرية والحرامية تكسب. ركّزوا كويس.";
+  host.innerHTML = '<div style="max-width:340px;width:100%;background:linear-gradient(160deg,#3A1E2A,#1B1230);' +
+    'border:1px solid rgba(209,72,63,.5);border-radius:20px;padding:24px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.55)">' +
+    '<div style="font-size:38px;margin-bottom:6px">⚠️</div>' +
+    '<p style="font-family:var(--disp);font-size:22px;color:var(--parch);margin:0 0 8px">' + title + "</p>" +
+    '<p style="font-size:14.5px;line-height:1.7;color:var(--muted);margin:0 0 18px">' + body + "</p>" +
+    '<button id="tieOk" class="btn">تمام، فهمت</button></div>';
+  document.body.appendChild(host);
+  var ok = host.querySelector("#tieOk");
+  if (ok) ok.onclick = function () { host.remove(); };
+}
+
 function renderFarewellModal() {
   var host = document.getElementById("farewellModal");
   var fw = state && state.farewellForMe;
@@ -2765,6 +2847,11 @@ appEl.addEventListener("click", async function (e) {
     var vwMx = Math.min(5, nonTh);
     var nvw = Math.max(1, Math.min(vwMx, (state.cfg.villagersToWin || 1) + Number(parts[1])));
     client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { villagersToWin: nvw }) });
+    return;
+  }
+  if (k === "vt") {
+    var nvt = Math.max(1, Math.min(5, (state.cfg.villagersToTie || 1) + Number(parts[1])));
+    client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { villagersToTie: nvt }) });
     return;
   }
   if (k === "dh") {
