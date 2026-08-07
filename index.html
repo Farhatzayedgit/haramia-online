@@ -130,6 +130,10 @@ input::placeholder{color:#6B5F92}
 .pick:active{transform:translateY(2px);box-shadow:0 2px 0 #131028}
 .pick.sel{border-color:var(--saffron);background:linear-gradient(180deg,rgba(233,163,60,.28),rgba(233,163,60,.1));
   color:var(--saffron);box-shadow:0 4px 0 #6E4A12,0 8px 18px rgba(233,163,60,.25)}
+.pick{position:relative}
+.vcount{position:absolute;top:5px;inset-inline-end:6px;min-width:20px;height:20px;line-height:20px;
+  border-radius:10px;background:var(--madder);color:#fff;font-size:12px;font-weight:800;padding:0 5px}
+.vcount.zero{background:rgba(255,255,255,.12);color:var(--muted)}
 .vr{display:flex;align-items:center;gap:9px;background:linear-gradient(180deg,#262046,#1E1938);
   border:1px solid rgba(255,255,255,.06);border-radius:15px;padding:9px 12px;margin-bottom:8px;
   box-shadow:0 4px 10px rgba(0,0,0,.3)}
@@ -279,17 +283,17 @@ const ROLE_DESC = {
 
 const DEFAULT_CFG = {
   thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false, doctorHealCount: 1,
-  lastMessage: true,
+  lastMessage: true, villagersToWin: 2,
   talkSeconds: 120, voteSeconds: 60, talkRounds: 2,
 };
 
 function suggestCfg(n) {
   const base = { talkSeconds: 120, voteSeconds: 60, talkRounds: 2, lastMessage: true };
-  if (n <= 5) return { ...base, thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false };
-  if (n <= 7) return { ...base, thieves: 2, doctor: true, cop: false, traitor: false, nightKill: false };
-  if (n <= 8) return { ...base, thieves: 2, doctor: true, cop: true, traitor: false, nightKill: true };
-  if (n <= 11) return { ...base, thieves: 2, doctor: true, cop: true, traitor: true, nightKill: true };
-  return { ...base, thieves: 3, doctor: true, cop: true, traitor: true, nightKill: true };
+  if (n <= 5) return { ...base, thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, villagersToWin: 2 };
+  if (n <= 7) return { ...base, thieves: 2, doctor: true, cop: false, traitor: false, nightKill: false, villagersToWin: 2 };
+  if (n <= 8) return { ...base, thieves: 2, doctor: true, cop: true, traitor: false, nightKill: true, villagersToWin: 3 };
+  if (n <= 11) return { ...base, thieves: 2, doctor: true, cop: true, traitor: true, nightKill: true, villagersToWin: 3 };
+  return { ...base, thieves: 3, doctor: true, cop: true, traitor: true, nightKill: true, villagersToWin: 4 };
 }
 
 function validateCfg(cfg, n) {
@@ -421,6 +425,15 @@ function winner(s) {
   const alive = alivePlayers(s);
   const th = alive.filter((p) => p.role === "thief").length;
   if (th === 0) return "village";
+  // كل اللي مش حرامي محسوب على أهل القرية (الخاين والدكتور والضابط والرصاصة الأخيرة وغيرهم)
+  const totalNonThieves = s.players.filter((p) => p.role !== "thief").length;
+  const goalRaw = Number(s.cfg.villagersToWin) || 0;
+  if (goalRaw > 0) {
+    const goal = Math.min(goalRaw, totalNonThieves); // مينفعش نطلب أكتر من العدد الموجود
+    const outNonThieves = s.players.filter((p) => !p.alive && p.role !== "thief").length;
+    return outNonThieves >= goal ? "thieves" : null;
+  }
+  // السلوك القديم لو الأوبشن مش مضبوط: الحرامية يكسبوا لما يوصلوا للتعادل في العدد
   if (th >= alive.length - th) return "thieves";
   return null;
 }
@@ -490,7 +503,7 @@ function autoCfg(s) {
   const n = s.players.length;
   if (n < 5) return s;
   const sg = suggestCfg(n);
-  s.cfg = { ...s.cfg, thieves: sg.thieves, doctor: sg.doctor, cop: sg.cop, traitor: sg.traitor, nightKill: sg.nightKill };
+  s.cfg = { ...s.cfg, thieves: sg.thieves, doctor: sg.doctor, cop: sg.cop, traitor: sg.traitor, nightKill: sg.nightKill, villagersToWin: sg.villagersToWin };
   return s;
 }
 
@@ -833,6 +846,15 @@ function viewFor(s, playerId) {
   const revealed = (p) => !p.alive || s.phase === "over" || (s.missionShown && p.role === "traitor");
   const iAmThief = me && me.role === "thief";
 
+  const liveCounts = {};
+  if (s.phase === "vote") {
+    s.players.forEach((p) => (liveCounts[p.id] = 0));
+    Object.values(s.votes || {}).forEach((arr) => {
+      const list = Array.isArray(arr) ? arr : (arr === null || arr === undefined ? [] : [arr]);
+      list.forEach((t) => { if (t !== null && t in liveCounts) liveCounts[t] += 1; });
+    });
+  }
+
   const players = s.players.map((p) => ({
     id: p.id,
     name: p.name,
@@ -841,6 +863,7 @@ function viewFor(s, playerId) {
     seen: p.seen,
     isHost: p.id === s.hostId,
     voted: s.phase === "vote" ? p.id in s.votes : null,
+    votesOn: s.phase === "vote" ? (liveCounts[p.id] || 0) : null, // كام واحد صوّت عليه دلوقتي
     // الدور بيتبعت بس لو: أنا هو، أو طلع برّا، أو اللعبة خلصت، أو إحنا حرامية مع بعض
     role: (me && p.id === me.id) || revealed(p) || (iAmThief && p.role === "thief" && s.phase !== "lobby")
       ? p.role : null,
@@ -1075,6 +1098,7 @@ else global.Engine = EngineExports;
           merged.voteSeconds = Math.max(10, Math.min(300, Number(merged.voteSeconds) || 60));
           merged.talkRounds = Math.max(1, Math.min(4, Number(merged.talkRounds) || 2));
           merged.doctorHealCount = Math.max(1, Math.min(3, Number(merged.doctorHealCount) || 1));
+          merged.villagersToWin = Math.max(1, Math.min(5, Number(merged.villagersToWin) || 1));
           s.cfg = merged;
           break;
         }
@@ -1440,6 +1464,108 @@ function esc(s) { return String(s).replace(/[&<>"']/g, function(c){ return {"&":
 function mmss(secs) { var s = Math.max(0, Math.floor(secs)); return ar(String(Math.floor(s / 60)).padStart(2, "0")) + ":" + ar(String(s % 60).padStart(2, "0")); }
 function buzz(ms) { try { navigator.vibrate && navigator.vibrate(ms || 16); } catch (e) {} }
 
+/* ------------------------- الأصوات (متولّدة، من غير ملفات) ------------------------- */
+var soundOn = localStorage.getItem("haramia-sound") !== "0";
+var audioCtx = null;
+function actx() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  } catch (e) { return null; }
+}
+/** نغمة واحدة: تردد من f1 لـ f2، بشكل موجة معيّن، بمدة ووقت بداية */
+function tone(f1, f2, dur, type, at, vol) {
+  var c = actx(); if (!c) return;
+  var t0 = c.currentTime + (at || 0);
+  var o = c.createOscillator(), g = c.createGain();
+  o.type = type || "sine";
+  o.frequency.setValueAtTime(f1, t0);
+  if (f2 && f2 !== f1) o.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol || 0.22, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(c.destination);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+/** ضربة/دقّة (ضوضاء قصيرة) للحاجات الدرامية */
+function thud(at, vol) {
+  var c = actx(); if (!c) return;
+  var t0 = c.currentTime + (at || 0), len = Math.floor(c.sampleRate * 0.3);
+  var buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+  for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  var src = c.createBufferSource(); src.buffer = buf;
+  var f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 420;
+  var g = c.createGain(); g.gain.value = vol || 0.5;
+  src.connect(f); f.connect(g); g.connect(c.destination);
+  src.start(t0);
+}
+var SFX = {
+  // نجاح: فانفير صاعد
+  win:      function () { [523, 659, 784, 1047].forEach(function (f, i) { tone(f, f, 0.22, "square", i * 0.11, 0.16); }); },
+  // فشل مضحك: ترومبون هابط "وا وا وا"
+  fail:     function () { [[330, 294], [294, 262], [262, 196]].forEach(function (p, i) { tone(p[0], p[1], 0.3, "sawtooth", i * 0.22, 0.16); }); },
+  // مسكوا حرامي: تشجيع
+  caught:   function () { tone(392, 784, 0.18, "square", 0, 0.18); tone(523, 1047, 0.3, "square", 0.16, 0.16); },
+  // بريء طلع: حزين وكوميدي
+  innocent: function () { tone(440, 220, 0.5, "triangle", 0, 0.2); tone(233, 175, 0.5, "sawtooth", 0.3, 0.14); },
+  // ضربة الليل
+  kill:     function () { thud(0, 0.55); tone(140, 60, 0.5, "sawtooth", 0.02, 0.2); },
+  // الدكتور أنقذ: رنّة سحرية
+  saved:    function () { [784, 1047, 1319].forEach(function (f, i) { tone(f, f, 0.16, "sine", i * 0.07, 0.16); }); },
+  // طلقة الرصاصة الأخيرة
+  shot:     function () { thud(0, 0.6); tone(900, 120, 0.22, "sawtooth", 0, 0.2); },
+  // نتيجة التصويت ظهرت
+  tally:    function () { tone(330, 330, 0.1, "square", 0, 0.14); tone(440, 440, 0.14, "square", 0.1, 0.14); },
+  // محدش طلع
+  nobody:   function () { tone(300, 300, 0.12, "triangle", 0, 0.13); tone(300, 240, 0.28, "triangle", 0.13, 0.13); },
+  // الخاين اتكشف
+  traitor:  function () { tone(220, 440, 0.3, "sawtooth", 0, 0.16); tone(415, 415, 0.3, "sawtooth", 0.26, 0.14); },
+};
+function sfx(name) {
+  if (!soundOn) return;
+  try { var f = SFX[name]; if (f) f(); } catch (e) {}
+}
+/** بيشغّل صوت مرة واحدة بس لكل لحظة (عشان render بيتكرر كتير) */
+var lastSfxKey = null;
+function sfxOnce(key, name) {
+  if (key === lastSfxKey) return;
+  lastSfxKey = key;
+  sfx(name);
+}
+
+/** بيقرر أنهي صوت يتشغّل حسب اللي ظاهر على الشاشة دلوقتي */
+function updateSfx() {
+  if (!state) return;
+  var p = state.phase;
+  if (p === "tally") {
+    sfxOnce("tally-" + state.day + "-" + (state.voteOutcome || ""), state.voteOutcome === "none" ? "nobody" : "tally");
+    return;
+  }
+  if (p === "morning") {
+    if (!state.events || !state.events.length) { sfxOnce("morn-" + state.day + "-empty", "nobody"); return; }
+    var e = state.events[state.eventIdx];
+    if (!e) return;
+    var key = "morn-" + state.day + "-" + state.eventIdx;
+    var name;
+    if (e.saved) name = "saved";
+    else if (e.kind === "rami") name = e.correct ? "caught" : "innocent";
+    else if (e.kind === "thief") name = "kill";
+    else if (e.kind === "cop") name = e.role === "thief" ? "caught" : "innocent";
+    else if (e.kind === "vote") name = e.role === "thief" ? "caught" : "innocent";
+    else name = "tally";
+    sfxOnce(key, name);
+    return;
+  }
+  if (p === "traitor") { sfxOnce("traitor-" + state.day, "traitor"); return; }
+  if (p === "over") {
+    var vWin = state.result === "village";
+    sfxOnce("over", vWin ? "win" : "fail");
+    return;
+  }
+  if (p === "night") { lastSfxKey = null; }
+}
+
 /* ---------------------------- الحالة العامة ---------------------------- */
 var client = null;
 var state = null;         // آخر state جاي من الشبكة (شكل viewFor)
@@ -1724,6 +1850,9 @@ function lobbyScreen() {
   var isHost = state.you.isHost, cfg = state.cfg, n = state.players.length;
   var maxTh = Math.max(1, Math.floor((n - 1) / 2));
   var villagers = n - cfg.thieves - (cfg.doctor ? 1 : 0) - (cfg.cop ? 1 : 0) - (cfg.traitor ? 1 : 0) - (cfg.rami ? 1 : 0);
+  var nonThieves = Math.max(1, n - cfg.thieves);           // كل اللي مش حرامي
+  var vwMax = Math.min(5, nonThieves);
+  var vwVal = Math.max(1, Math.min(vwMax, cfg.villagersToWin || 1));
   var h = '<div class="fade">';
   h += '<p class="eb">كود الأوضة — ابعته لأصحابك</p><div class="codebig">' + esc(state.code) + "</div>" +
     '<p class="codehint">هما هيفتحوا نفس اللينك ويكتبوا الكود ده</p></div>';
@@ -1744,6 +1873,10 @@ function lobbyScreen() {
     h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
       ctrEmblem("thief", 26, "var(--madder)") + '<div><div class="swt">عدد الحرامية</div><div class="sws">لحد ' + ar(maxTh) + "</div></div></div>" +
       '<div class="step"><button data-a="th:-1">−</button><div class="v">' + ar(cfg.thieves) + '</div><button data-a="th:1">+</button></div>' +
+      "</div></div>";
+    h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
+      ctrEmblem("villager", 26, "var(--teal)") + '<div><div class="swt">كام أهل قرية يخرجوا عشان الحرامية يكسبوا</div><div class="sws">من ١ لـ' + ar(vwMax) + ' — كل اللي مش حرامي محسوب أهل قرية</div></div></div>' +
+      '<div class="step"><button data-a="vw:-1">−</button><div class="v">' + ar(vwVal) + '</div><button data-a="vw:1">+</button></div>' +
       "</div></div>";
     h += '<div class="card">' +
       toggleRow("doctor", cfg.doctor, "الدكتور", "بينقذ اللي اتضرب") +
@@ -1768,7 +1901,8 @@ function lobbyScreen() {
       (cfg.doctor ? badge("دكتور", ROLES.doctor.color) : "") + (cfg.cop ? badge("ضابط", ROLES.cop.color) : "") +
       (cfg.traitor ? badge("خاين", ROLES.traitor.color) : "") +
       (cfg.rami ? badge("الرصاصة الأخيرة", ROLES.rami.color) : "") +
-      badge(villagers > 0 ? ar(villagers) + " أهل قرية" : "مفيش أهل قرية", ROLES.villager.color) + "</div></div>";
+      badge(villagers > 0 ? ar(villagers) + " أهل قرية" : "مفيش أهل قرية", ROLES.villager.color) + "</div>" +
+      '<div style="font-size:12.5px;color:var(--muted);margin-top:9px;line-height:1.6">الحرامية يكسبوا لما يخرج <b style="color:var(--parch)">' + ar(vwVal) + '</b> من أهل القرية · أهل القرية يكسبوا لما يمسكوا كل الحرامية.</div></div>';
     h += '<button class="btn mt" data-a="start"' + (n < 3 || villagers < 1 ? " disabled" : "") + ">" +
       (n < 3 ? "مستنيين " + ar(3 - n) + " كمان" : villagers < 1 ? "الأدوار كتير على العدد ده" : "ابدأ اللعبة") + "</button>";
   } else {
@@ -1879,7 +2013,9 @@ function voteScreen() {
 
   cands.forEach(function (p) {
     var picked = voteSel.indexOf(p.id) !== -1;
+    var vc = p.votesOn || 0;
     h += '<button data-a="votePick:' + p.id + '" class="pick' + (picked ? " sel" : "") + '"' + (!canVote ? " disabled" : "") + ">" +
+      '<span class="vcount' + (vc ? "" : " zero") + '">' + ar(vc) + "</span>" +
       esc(p.name) + (picked ? '<div class="pickVoted">مختار</div>' : (p.voted ? '<div class="pickVoted">صوّت</div>' : "")) + "</button>";
   });
   h += "</div>";
@@ -2102,6 +2238,7 @@ function uiSheetHTML() {
     });
     h += '<p class="eb" style="margin-top:18px">قواعد مهمة</p>' +
       '<div style="font-size:13.5px;color:var(--muted);line-height:1.7">' +
+      '• <b style="color:var(--parch)">المكسب:</b> أهل القرية يكسبوا لما يمسكوا كل الحرامية. الحرامية يكسبوا لما يخرج العدد اللي المضيف حدّده من أهل القرية — وكل اللي مش حرامي (الخاين والدكتور والضابط والرصاصة الأخيرة وغيرهم) محسوب على أهل القرية.<br>' +
       '• <b style="color:var(--parch)">الكشف عن الهوية:</b> مفيش حد بتتكشف هويته وهو لسه في الدور بيلعب — الهوية بتظهر بس لما اللاعب يطلع برّا (بالتصويت أو الليل أو الرصاصة الأخيرة).<br>' +
       '• <b style="color:var(--parch)">التعادل:</b> لو الأصوات اتعادلت، بتتعمل إعادة على المتعادلين بس، والمتعادلين نفسهم مبيصوّتوش فيها، لحد ما حد يطلع.<br>' +
       '• <b style="color:var(--parch)">التصويت:</b> تقدر تصوّت على أكتر من واحد في نفس الجولة، وبعدها تأكّد.<br>' +
@@ -2142,6 +2279,7 @@ function renderMoreMenu() {
   if (chatAvailable()) rows += '<button data-a="moreChat" style="' + itemStyle + '">💬 الشات' +
     (unread > 0 ? '<span style="background:var(--madder);color:#fff;font-size:10px;font-weight:800;border-radius:50%;' +
       'width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-inline-start:auto">' + Math.min(unread, 9) + '</span>' : '') + '</button>';
+  rows += '<button data-a="moreSound" style="' + itemStyle + '">' + (soundOn ? "🔊 الأصوات ✓" : "🔇 الأصوات") + '</button>';
   rows += '<button data-a="moreLandscape" style="' + itemStyle + '">⛶ وضع العرض العريض' + (landscapeMode ? " ✓" : "") + '</button>';
   if (!host) {
     host = document.createElement("div");
@@ -2207,6 +2345,14 @@ document.addEventListener("click", function (e) {
   if (e.target && e.target.id === "morebtn") { moreMenuOpen = !moreMenuOpen; renderMoreMenu(); return; }
   var moreChatBtn = e.target.closest && e.target.closest('[data-a="moreChat"]');
   if (moreChatBtn) { chatOpen = !chatOpen; moreMenuOpen = false; renderChatPanel(); renderMoreMenu(); return; }
+  var moreSoundBtn = e.target.closest && e.target.closest('[data-a="moreSound"]');
+  if (moreSoundBtn) {
+    soundOn = !soundOn;
+    try { localStorage.setItem("haramia-sound", soundOn ? "1" : "0"); } catch (err) {}
+    if (soundOn) { actx(); sfx("saved"); }
+    renderMoreMenu();
+    return;
+  }
   var moreLandBtn = e.target.closest && e.target.closest('[data-a="moreLandscape"]');
   if (moreLandBtn) { moreMenuOpen = false; renderMoreMenu(); toggleLandscape(); return; }
   if (e.target && e.target.id === "chatclose") { chatOpen = false; renderChatPanel(); renderMoreMenu(); return; }
@@ -2360,11 +2506,162 @@ function render() {
     if (state && state.phase === "reveal" && !state.you.seen) bindFlip();
     if (!showLandscape) renderChatPanel(); // في العرض العريض الشات ظاهر جوه العمود مش عايم
     renderFarewellModal();
+    renderNightTask();
+    updateSfx();
     renderMoreButton();
     renderMoreMenu();
     if (showLandscape) restoreInlineChatInput(lPrevValue, lWasFocused);
   } catch (e) { /* الصفحة يمكن اتقفلت أو في تحديث متأخر وصل بعدها — نتجاهله بأمان */ }
 }
+/* ------------------------- مهمة الليل (تشغيل اللي مستنيين) -------------------------
+ * المشكلة: إحنا بنلعب قاعدين جنب بعض. لما ييجي الليل، اللي معندهمش دور
+ * بيقعدوا فاضيين فيبصّوا على اللي بيدوس على موبايله ويعرفوا مين الحرامي أو
+ * الضابط أو الدكتور. الحل: كل واحد مستني بياخد مهمة سريعة على موبايله،
+ * فالكل بيبقى مركّز في شاشته ومحدش فاضي يراقب. المهمة محلية بالكامل —
+ * مبتأثرش على اللعبة ولا بتتبعت للسيرفر، وبتتغيّر كل ليلة.
+ */
+var nightTask = null; // { day, step, kind, score, timers[] }
+
+function nightTaskShouldShow() {
+  return !!(state && state.phase === "night" && !state.myTurn && state.you && state.you.alive);
+}
+
+function clearNightTask() {
+  if (nightTask && nightTask.timers) nightTask.timers.forEach(function (t) { clearInterval(t); clearTimeout(t); });
+  nightTask = null;
+  var el = document.getElementById("nightTask");
+  if (el) el.remove();
+}
+
+function renderNightTask() {
+  if (!nightTaskShouldShow()) { clearNightTask(); return; }
+  var host = document.getElementById("nightTask");
+  // لو المهمة شغّالة بالفعل لنفس اللحظة، سيبها زي ما هي (مترجعش من الأول كل تحديث)
+  if (host && nightTask && nightTask.day === state.day && nightTask.step === state.nightStep) return;
+  clearNightTask();
+
+  var kinds = ["coins", "odd", "order"];
+  var kind = kinds[Math.abs(state.day + String(state.nightStep || "").length) % kinds.length];
+  nightTask = { day: state.day, step: state.nightStep, kind: kind, score: 0, timers: [] };
+
+  host = document.createElement("div");
+  host.id = "nightTask";
+  host.style.cssText = "position:fixed;inset:0;z-index:160;background:linear-gradient(170deg,#171232,#0E0B20);" +
+    "display:flex;flex-direction:column;padding:16px;overflow:hidden";
+  document.body.appendChild(host);
+
+  var titles = { coins: "اجمع الفلوس", odd: "هات المختلف", order: "بالترتيب" };
+  var hints = {
+    coins: "دوس على 💰 بس — وخد بالك من 💣",
+    odd: "دوس على الرمز المختلف عن الباقي",
+    order: "دوس على الأرقام بالترتيب من ١",
+  };
+  host.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:space-between;flex:none">' +
+    '<div><div style="font-family:var(--body);font-weight:800;font-size:12px;color:var(--saffron);letter-spacing:1px">مهمة الليل</div>' +
+    '<div style="font-family:var(--disp);font-size:21px;color:var(--parch)">' + titles[kind] + "</div></div>" +
+    '<div style="text-align:center"><div style="font-size:11px;color:var(--muted);font-weight:700">نقاطك</div>' +
+    '<div id="ntScore" style="font-family:var(--disp);font-size:26px;color:var(--saffron)">٠</div></div></div>' +
+    '<div style="font-size:12.5px;color:var(--muted);margin:6px 0 10px;flex:none">' + hints[kind] + "</div>" +
+    '<div id="ntArea" style="position:relative;flex:1;border:1px solid rgba(255,255,255,.08);border-radius:16px;' +
+    'background:rgba(255,255,255,.02);overflow:hidden"></div>' +
+    '<div style="font-size:11.5px;color:var(--faint);text-align:center;margin-top:10px;flex:none">' +
+    "سيب موبايلك قدامك — الليل هيخلص لوحده 🌙</div>";
+
+  var area = host.querySelector("#ntArea");
+  var scoreEl = host.querySelector("#ntScore");
+  function addScore(n) {
+    if (!nightTask) return;
+    nightTask.score = Math.max(0, nightTask.score + n);
+    if (scoreEl) scoreEl.textContent = ar(nightTask.score);
+  }
+
+  if (kind === "coins") startCoinsTask(area, addScore);
+  else if (kind === "odd") startOddTask(area, addScore);
+  else startOrderTask(area, addScore);
+}
+
+/** لعبة ١: رموز بتظهر عشوائي — دوس على الفلوس وابعد عن القنابل */
+function startCoinsTask(area, addScore) {
+  var spawn = setInterval(function () {
+    if (!area.isConnected) return;
+    var good = Math.random() > 0.32;
+    var el = document.createElement("button");
+    el.textContent = good ? "💰" : "💣";
+    var size = 46;
+    el.style.cssText = "position:absolute;border:0;background:none;font-size:32px;cursor:pointer;padding:0;" +
+      "width:" + size + "px;height:" + size + "px;transition:transform .12s,opacity .12s;" +
+      "left:" + Math.random() * Math.max(1, area.clientWidth - size) + "px;" +
+      "top:" + Math.random() * Math.max(1, area.clientHeight - size) + "px";
+    el.onclick = function () {
+      buzz(10);
+      addScore(good ? 1 : -1);
+      el.style.transform = "scale(1.6)";
+      el.style.opacity = "0";
+      setTimeout(function () { el.remove(); }, 120);
+    };
+    area.appendChild(el);
+    setTimeout(function () { el.remove(); }, 1400);
+  }, 620);
+  nightTask.timers.push(spawn);
+}
+
+/** لعبة ٢: شبكة رموز متشابهة وواحد مختلف */
+function startOddTask(area, addScore) {
+  var sets = [["🙂", "🙃"], ["🐱", "🐺"], ["🍉", "🍅"], ["⭐", "✨"], ["🔵", "🟣"], ["🗝️", "🔑"]];
+  function round() {
+    if (!area.isConnected) return;
+    var pair = sets[Math.floor(Math.random() * sets.length)];
+    var n = 12, odd = Math.floor(Math.random() * n);
+    var html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:10px;height:100%;box-sizing:border-box">';
+    for (var i = 0; i < n; i++) {
+      html += '<button data-odd="' + (i === odd ? "1" : "0") + '" style="border:1px solid rgba(255,255,255,.07);' +
+        "background:rgba(255,255,255,.03);border-radius:12px;font-size:26px;cursor:pointer;padding:0\">" +
+        (i === odd ? pair[1] : pair[0]) + "</button>";
+    }
+    area.innerHTML = html + "</div>";
+    Array.prototype.forEach.call(area.querySelectorAll("button"), function (b) {
+      b.onclick = function () {
+        buzz(10);
+        if (b.getAttribute("data-odd") === "1") { addScore(1); round(); }
+        else { addScore(-1); b.style.opacity = ".25"; }
+      };
+    });
+  }
+  round();
+}
+
+/** لعبة ٣: دوس على الأرقام بالترتيب */
+function startOrderTask(area, addScore) {
+  function round() {
+    if (!area.isConnected) return;
+    var order = [];
+    for (var i = 1; i <= 9; i++) order.push(i);
+    for (var j = order.length - 1; j > 0; j--) { var k = Math.floor(Math.random() * (j + 1)); var t = order[j]; order[j] = order[k]; order[k] = t; }
+    var next = 1;
+    var html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;padding:10px;height:100%;box-sizing:border-box">';
+    order.forEach(function (v) {
+      html += '<button data-v="' + v + '" style="border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.03);' +
+        "border-radius:12px;font-family:var(--disp);font-size:23px;color:var(--parch);cursor:pointer\">" + ar(v) + "</button>";
+    });
+    area.innerHTML = html + "</div>";
+    Array.prototype.forEach.call(area.querySelectorAll("button"), function (b) {
+      b.onclick = function () {
+        buzz(10);
+        if (Number(b.getAttribute("data-v")) === next) {
+          b.style.background = "rgba(233,163,60,.25)";
+          b.style.color = "var(--saffron)";
+          b.disabled = true;
+          next++;
+          if (next > 9) { addScore(3); round(); }
+        } else { addScore(-1); }
+      };
+    });
+  }
+  round();
+}
+
+
 function renderFarewellModal() {
   var host = document.getElementById("farewellModal");
   var fw = state && state.farewellForMe;
@@ -2432,6 +2729,7 @@ appEl.addEventListener("click", async function (e) {
 
   var el = e.target.closest("[data-a]"); if (!el) return;
   var a0 = el.getAttribute("data-a");
+  if (soundOn) { try { actx(); } catch (err) {} } // فتح الصوت لازم يبقى بعد أول لمسة من المستخدم
   if (a0 === "closeSheet") { if (e.target.closest("[data-stop]")) return; uiSheet = null; render(); return; }
 
   var parts = a0.split(":"), k = parts[0];
@@ -2460,6 +2758,13 @@ appEl.addEventListener("click", async function (e) {
     var maxTh = Math.max(1, Math.floor((state.players.length - 1) / 2));
     var nv = Math.max(1, Math.min(maxTh, state.cfg.thieves + Number(parts[1])));
     client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { thieves: nv }) });
+    return;
+  }
+  if (k === "vw") {
+    var nonTh = Math.max(1, state.players.length - state.cfg.thieves);
+    var vwMx = Math.min(5, nonTh);
+    var nvw = Math.max(1, Math.min(vwMx, (state.cfg.villagersToWin || 1) + Number(parts[1])));
+    client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { villagersToWin: nvw }) });
     return;
   }
   if (k === "dh") {
