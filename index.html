@@ -1487,25 +1487,76 @@ else global.Engine = EngineExports;
 
   /** بيدخل بحساب مجهول — مجاني، ومفيش إيميل أو باسورد.
    *  محدود بمهلة ١٢ ثانية — من غيرها لو النت اتعلّق، التطبيق كان هيفضل معلّق للأبد. */
-  FirebaseBackend.prototype.signIn = function () {
+  /** بيمسح قاعدة بيانات تسجيل الدخول بتاعة فايربيز (IndexedDB).
+   *  لو اتلغبطت أو اتقفلت من تبويب تاني، signInAnonymously بيعلّق للأبد
+   *  من غير نجاح ولا خطأ — وده بالظبط اللي بيعمل "ماردّش خلال ٢٠ ثانية". */
+  function wipeAuthDB() {
+    return new Promise(function (resolve) {
+      try {
+        if (!window.indexedDB || !indexedDB.deleteDatabase) return resolve();
+        var req = indexedDB.deleteDatabase("firebaseLocalStorageDb");
+        req.onsuccess = function () { resolve(); };
+        req.onerror = function () { resolve(); };
+        req.onblocked = function () { resolve(); };
+        setTimeout(resolve, 1500);
+      } catch (e) { resolve(); }
+    });
+  }
+
+  /** محاولة دخول واحدة بمهلة محددة. لو memoryOnly=true بنشتغل من غير
+   *  IndexedDB خالص (الجلسة في الذاكرة بس) — ده بيتخطى العطل تمامًا. */
+  FirebaseBackend.prototype._signInOnce = function (memoryOnly, ms) {
     var self = this;
-    log("بندخل بحساب مجهول…");
     return new Promise(function (resolve, reject) {
       var done = false;
       var timer = setTimeout(function () {
         if (done) return; done = true;
-        reject(new Error("timeout: الاتصال بفايربيز ماردّش خلال ١٢ ثانية"));
-      }, 12000);
-      self.auth.onAuthStateChanged(function (user) {
-        if (done || !user) return;
-        done = true; clearTimeout(timer);
-        log("دخلنا بنجاح — uid=" + user.uid);
-        resolve(user.uid);
-      });
-      self.auth.signInAnonymously().catch(function (e) {
-        if (done) return; done = true; clearTimeout(timer);
-        log("!! فشل تسجيل الدخول: " + e.message);
-        reject(e);
+        log("!! المهلة خلصت من غير رد" + (memoryOnly ? " (وضع الذاكرة)" : ""));
+        reject(new Error("timeout: فايربيز ماردّش"));
+      }, ms);
+      var finish = function (fn, v) { if (done) return; done = true; clearTimeout(timer); fn(v); };
+
+      var start = function () {
+        self.auth.onAuthStateChanged(function (user) {
+          if (!user) return;
+          log("دخلنا بنجاح — uid=" + user.uid);
+          finish(resolve, user.uid);
+        }, function (e) {
+          log("!! خطأ في حالة الدخول: " + (e && (e.code || e.message)));
+          finish(reject, e);
+        });
+        self.auth.signInAnonymously().catch(function (e) {
+          log("!! فشل تسجيل الدخول: " + ((e && (e.code || e.message)) || e));
+          finish(reject, e);
+        });
+      };
+
+      if (memoryOnly) {
+        try {
+          self.auth.setPersistence(firebase.auth.Auth.Persistence.NONE).then(start).catch(start);
+        } catch (e) { start(); }
+      } else { start(); }
+    });
+  };
+
+  /** بيدخل بحساب مجهول — مجاني، ومفيش إيميل أو باسورد.
+   *  لو المحاولة الأولى علّقت (غالبًا بسبب IndexedDB بايظة أو تبويب تاني
+   *  ماسكها)، بنمسح القاعدة ونجرّب تاني من غير IndexedDB خالص. */
+  FirebaseBackend.prototype.signIn = function () {
+    var self = this;
+    log("بندخل بحساب مجهول…");
+    try {
+      if (location.protocol === "file:") return Promise.reject(new Error("file-protocol: الصفحة مفتوحة من الملف مباشرة"));
+      if (navigator && navigator.onLine === false) return Promise.reject(new Error("offline: مفيش اتصال بالنت"));
+    } catch (e) { /* لو المتصفح مبيسمحش، نكمّل عادي */ }
+
+    return self._signInOnce(false, 9000).catch(function (err) {
+      var m = (err && (err.code || err.message)) || String(err);
+      // الأخطاء الواضحة (زي Anonymous مقفول) منعيدش معاها — نوريها للمستخدم على طول
+      if (!/timeout/i.test(m)) throw err;
+      log("المحاولة الأولى علّقت — بنمسح بيانات الدخول ونجرّب من غير IndexedDB…");
+      return wipeAuthDB().then(function () {
+        return self._signInOnce(true, 15000);
       });
     });
   };
@@ -1533,7 +1584,9 @@ function mmss(secs) { var s = Math.max(0, Math.floor(secs)); return ar(String(Ma
 function buzz(ms) { try { navigator.vibrate && navigator.vibrate(ms || 16); } catch (e) {} }
 
 /* ------------------------- الأصوات (متولّدة، من غير ملفات) ------------------------- */
-var soundOn = localStorage.getItem("haramia-sound") !== "0";
+var soundOn = (function () {
+  try { return localStorage.getItem("haramia-sound") !== "0"; } catch (e) { return true; }
+})();
 var audioCtx = null;
 function actx() {
   try {
@@ -1692,11 +1745,16 @@ async function boot() {
 }
 function friendlyError(e) {
   var m = (e && (e.code || e.message)) || String(e);
-  if (/timeout/i.test(m)) return "الاتصال بفايربيز ماردّش خلال ١٢ ثانية. جرّب تقفل وتفتح الصفحة تاني، أو اتأكد إن الدخول المجهول (Anonymous) مفعّل في Firebase Authentication.";
+  if (/file-protocol/i.test(m)) return "الصفحة مفتوحة من الملف مباشرة (file://) — فايربيز مش بيشتغل كده. لازم ترفعها على استضافة أو تفتحها على سيرفر محلي (مثلًا GitHub Pages أو Firebase Hosting).";
+  if (/offline/i.test(m)) return "مفيش اتصال بالنت. اتأكد إنك متوصّل وجرّب تاني.";
+  if (/unauthorized[_-]?domain/i.test(m)) return "الدومين ده مش مسموح في فايربيز — روح Authentication ← Settings ← Authorized domains وضيف الدومين اللي فاتح منه.";
+  if (/network[_-]?request[_-]?failed/i.test(m)) return "النت قطع في نص الاتصال بفايربيز. جرّب تاني، ولو بتستخدم VPN أو نت ضعيف جرّب تقفله أو تغيّر الشبكة.";
+  if (/timeout/i.test(m)) return "فايربيز ماردّش، حتى بعد ما جرّبنا نتخطى بيانات الدخول المخزّنة. غالبًا في تبويب تاني للّعبة مفتوح ماسك البيانات — اقفل كل التبويبات وافتح واحد بس. ولو المشكلة فضلت، دوس \"امسح بيانات المتصفح وافتح من الأول\" تحت.";
   if (/permission[_-]denied/i.test(m)) return "مينفعش نوصل لقاعدة البيانات. تأكد إنك نشرت قواعد الأمان (Rules) في Firebase Console ودست Publish.";
-  if (/network|offline/i.test(m)) return "مفيش اتصال بالنت. تأكد إنك متوصّل وجرّب تاني.";
+  if (/network/i.test(m)) return "مفيش اتصال بالنت. تأكد إنك متوصّل وجرّب تاني.";
   if (/api[_-]?key/i.test(m)) return "كود إعداد Firebase (Config) غلط أو ناقص.";
   if (/auth\/admin-restricted-operation|operation-not-allowed/i.test(m)) return "الدخول المجهول (Anonymous) مش مفعّل في Firebase — روح Authentication ← Sign-in method وفعّله.";
+  if (/firebase is not defined/i.test(m)) return "ملفات فايربيز نفسها مش اتحمّلت — يعني في حاجة بتحجب gstatic.com. جرّب شبكة تانية أو اقفل الـVPN.";
   return "حصل خطأ في الاتصال: " + m;
 }
 
@@ -1859,7 +1917,9 @@ function view() {
   if (conn === "connecting") return '<div class="mid ctr"><div class="spin"></div><p class="d" style="margin-top:16px">بنتوصّل…</p></div>';
   if (conn === "error" && !client) {
     return '<div class="mid"><div class="errbox">' + esc(connError) + "</div>" +
-      '<button class="btn dark" data-a="retry">جرّب تاني</button></div>' + footer();
+      '<button class="btn dark" data-a="retry">جرّب تاني</button>' +
+      '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="hardReset">امسح بيانات المتصفح وافتح من الأول</button>' +
+      '<button class="btn ghost sm mt" style="font-size:13px;padding:10px" data-a="showDebug">شوف تفاصيل الخطأ</button></div>' + footer();
   }
   if (!client) return homeScreen() + footer() + uiSheetHTML();
   if (!state) {
@@ -3008,6 +3068,33 @@ appEl.addEventListener("click", async function (e) {
   buzz();
 
   if (k === "retry") { conn = "connecting"; render(); boot(); return; }
+  if (k === "showDebug") { debugOpen = !debugOpen; renderDebugPanel(); return; }
+  if (k === "hardReset") {
+    // بيمسح كل البيانات المحلية اللي ممكن تكون اتلغبطت وبتمنع الدخول، وبعدين بيفتح من الأول
+    (async function () {
+      var names = ["firebaseLocalStorageDb", "firebase-heartbeat-database", "firebase-installations-database"];
+      try {
+        if (window.indexedDB && indexedDB.databases) {
+          var all = await indexedDB.databases();
+          all.forEach(function (d) { if (d && d.name && names.indexOf(d.name) === -1) names.push(d.name); });
+        }
+      } catch (e) {}
+      await Promise.all(names.map(function (n) {
+        return new Promise(function (res) {
+          try {
+            var r = indexedDB.deleteDatabase(n);
+            r.onsuccess = r.onerror = r.onblocked = function () { res(); };
+            setTimeout(res, 1200);
+          } catch (e) { res(); }
+        });
+      }));
+      try { localStorage.clear(); } catch (e) {}
+      try { sessionStorage.clear(); } catch (e) {}
+      try { if (window.caches && caches.keys) { var ks = await caches.keys(); await Promise.all(ks.map(function (c) { return caches.delete(c); })); } } catch (e) {}
+      location.reload();
+    })();
+    return;
+  }
   if (k === "rerender") { render(); return; }
   if (k === "create") { doCreate(); return; }
   if (k === "join") { doJoin(); return; }
