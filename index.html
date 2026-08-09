@@ -1721,6 +1721,72 @@ function wipeHeartbeatDB() {
   });
 }
 
+/** بيكلّم فايربيز مباشرةً (من غير الـSDK) عشان نعرف السبب الحقيقي لما الدخول
+ *  يعلّق. الـSDK بيفضل ساكت، لكن الطلب المباشر بيرجّع كود الخطأ بالظبط. */
+async function diagnoseFirebase() {
+  var out = { auth: null, db: null, authCode: "" };
+
+  function withTimeout(url, opts, ms) {
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var t = setTimeout(function () { if (ctrl) ctrl.abort(); }, ms);
+    if (ctrl) opts = Object.assign({}, opts, { signal: ctrl.signal });
+    return fetch(url, opts).finally(function () { clearTimeout(t); });
+  }
+
+  // ١) خدمة تسجيل الدخول
+  try {
+    var r = await withTimeout(
+      "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + FIREBASE_CONFIG.apiKey,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ returnSecureToken: true }) },
+      9000);
+    var j = {};
+    try { j = await r.json(); } catch (e) {}
+    if (r.ok && j.idToken) out.auth = "ok";
+    else {
+      out.authCode = (j.error && (j.error.message || j.error.status)) || ("HTTP " + r.status);
+      out.auth = "error";
+    }
+  } catch (e) {
+    out.auth = "unreachable";
+    out.authCode = e && e.name === "AbortError" ? "timeout" : (e && e.message) || "network";
+  }
+
+  // ٢) قاعدة البيانات
+  try {
+    var r2 = await withTimeout(FIREBASE_CONFIG.databaseURL + "/.json?shallow=true", {}, 9000);
+    out.db = r2.ok ? "ok" : "HTTP " + r2.status;
+  } catch (e) {
+    out.db = "unreachable";
+  }
+
+  if (window.__firebaseDebugLog)
+    window.__firebaseDebugLog.push("تشخيص: auth=" + out.auth + " (" + out.authCode + ") db=" + out.db);
+  return out;
+}
+
+/** بيحوّل نتيجة التشخيص لرسالة واضحة تقول المشكلة فين بالظبط */
+function diagnosisMessage(d) {
+  if (!d) return null;
+  var c = String(d.authCode || "");
+  if (d.auth === "error" && /ADMIN_ONLY_OPERATION/i.test(c))
+    return "السبب اتحدد: الدخول المجهول (Anonymous) مقفول في مشروعك. افتح Firebase Console ← Authentication ← Sign-in method ← Anonymous ← فعّله (Enable) ودوس Save، وبعدين دوس \"جرّب تاني\".";
+  if (d.auth === "error" && /API[_ ]?KEY|INVALID_KEY|API key not valid/i.test(c))
+    return "السبب اتحدد: مفتاح الـAPI في إعدادات فايربيز غلط أو متقيّد. راجع Project settings ← Web API Key، ولو عامل قيود على المفتاح اسمح للدومين بتاعك.";
+  if (d.auth === "error" && /PROJECT_NOT_FOUND|CONFIGURATION_NOT_FOUND/i.test(c))
+    return "السبب اتحدد: المشروع مش موجود أو الإعدادات ناقصة في فايربيز (" + c + ").";
+  if (d.auth === "error" && /QUOTA|TOO_MANY|RESOURCE_EXHAUSTED/i.test(c))
+    return "السبب اتحدد: وصلت لحد الاستخدام المسموح في فايربيز (" + c + "). استنى شوية وجرّب تاني.";
+  if (d.auth === "error")
+    return "السبب اتحدد: فايربيز رفض تسجيل الدخول — " + c;
+  if (d.auth === "unreachable" && d.db === "unreachable")
+    return "السبب اتحدد: مفيش وصول لسيرفرات جوجل خالص من الشبكة دي. جرّب بيانات الموبايل بدل الواي فاي، أو شبكة تانية.";
+  if (d.auth === "unreachable")
+    return "السبب اتحدد: سيرفر تسجيل الدخول (identitytoolkit.googleapis.com) محجوب أو مش راد من الشبكة دي، رغم إن باقي فايربيز شغّال. جرّب شبكة تانية أو بيانات الموبايل.";
+  if (d.auth === "ok")
+    return "غريبة: تسجيل الدخول شغّال لما بنكلّم فايربيز مباشرة، بس الـSDK بيعلّق. جرّب \"امسح بيانات المتصفح وافتح من الأول\"، ولو فضلت جرّب متصفح تاني.";
+  return null;
+}
+
 async function boot() {
   try {
     // باج معروف وموثّق في SDK فايربيز نفسه (firebase/firebase-js-sdk#7736):
@@ -1741,6 +1807,17 @@ async function boot() {
     conn = "error";
     connError = friendlyError(e);
     render();
+    // لو علّق من غير سبب واضح، نكلّم فايربيز مباشرة ونقول السبب الحقيقي
+    try {
+      var m = (e && (e.code || e.message)) || "";
+      if (/timeout/i.test(m)) {
+        connError = "بنحدد سبب المشكلة… ثانية واحدة.";
+        render();
+        var d = await diagnoseFirebase();
+        connError = diagnosisMessage(d) || friendlyError(e);
+        render();
+      }
+    } catch (e2) { /* لو التشخيص نفسه فشل نسيب الرسالة الأصلية */ }
   }
 }
 function friendlyError(e) {
