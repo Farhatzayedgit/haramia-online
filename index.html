@@ -860,11 +860,21 @@ function viewFor(s, playerId) {
   const iAmThief = me && me.role === "thief";
 
   const liveCounts = {};
+  const myVoters = [];   // أسامي اللي صوّتوا عليّ أنا بالتحديد
   if (s.phase === "vote") {
     s.players.forEach((p) => (liveCounts[p.id] = 0));
-    Object.values(s.votes || {}).forEach((arr) => {
+    Object.keys(s.votes || {}).forEach((voterId) => {
+      const arr = s.votes[voterId];
       const list = Array.isArray(arr) ? arr : (arr === null || arr === undefined ? [] : [arr]);
-      list.forEach((t) => { if (t !== null && t in liveCounts) liveCounts[t] += 1; });
+      list.forEach((t) => {
+        if (t === null || t === undefined) return;
+        if (t in liveCounts) liveCounts[t] += 1;
+        // بنبعت أسامي اللي صوّتوا على الشخص ده هو بس — مش أصوات الناس التانية
+        if (me && Number(t) === me.id) {
+          const v = findPlayer(s, Number(voterId));
+          if (v) myVoters.push(v.name);
+        }
+      });
     });
   }
 
@@ -910,6 +920,7 @@ function viewFor(s, playerId) {
       partners: me.role === "thief" ? s.players.filter((p) => p.role === "thief" && p.id !== me.id).map((p) => p.name) : [],
       mission: me.role === "traitor" ? s.mission : null,
       myVote: s.phase === "vote" ? (s.votes[me.id] ?? null) : null,
+      myVoters: s.phase === "vote" ? myVoters : null,
     } : null,
     nightStep: step,
     nightProgress: (s.phase === "night" && s.night) ? (function () {
@@ -1113,7 +1124,7 @@ else global.Engine = EngineExports;
      مبنحفظش قبل الشات والإيموجي وخلافه عشان منملاش الذاكرة بحاجات مش مهمة. */
   var STEP_ACTIONS = {
     start: 1, forceVote: 1, tallyNext: 1, revote: 1, runoff: 1, morningNext: 1,
-    next: 1, night: 1, vote: 1, again: 1, restart: 1, startTimer: 1,
+    next: 1, night: 1, vote: 1, again: 1, restart: 1, startTimer: 1, kick: 1,
   };
 
   HostBrain.prototype.snapshot = function () {
@@ -1216,13 +1227,25 @@ else global.Engine = EngineExports;
           break;
         }
         case "again": {
-          if (!isHost || s.phase !== "over") return;
+          // الرجوع للّوبي — شغّال في أي وقت دلوقتي (مش بعد نهاية اللعبة بس)،
+          // عشان المضيف يقدر يبدأ من جديد ويغيّر الإعدادات واللاعيبة في أي لحظة.
+          if (!isHost) return;
           s.phase = "lobby";
           s.players.forEach(function (p) { p.role = null; p.alive = true; p.seen = false; });
           s.day = 0; s.events = []; s.eventIdx = 0; s.result = null;
           s.log = { outs: [], healed: [], votes: [] };
           s.mission = null; s.missionStatus = "wait"; s.missionShown = false;
           s.voteOutcome = null; s.deadline = null; s.night = null; s.votes = {}; s.runoff = null; s._tied = null;
+          delete s._counts; delete s._rawVotes;
+          break;
+        }
+        case "kick": {
+          // المضيف بيطلّع لاعب برّا الأوضة — في اللوبي بس، وطبعًا مش نفسه
+          if (!isHost || s.phase !== "lobby") return;
+          var kid = Number(msg.id);
+          if (kid === s.hostId) return;
+          s.players = s.players.filter(function (x) { return x.id !== kid; });
+          E.autoCfg(s);
           break;
         }
         case "restart": {
@@ -2072,7 +2095,13 @@ function lobbyScreen() {
   state.players.forEach(function (p) {
     h += '<div class="prow"><div class="dotc' + (p.connected === false ? " off" : "") + '"></div>' +
       '<div class="nm">' + esc(p.name) + (p.isHost ? " ★" : "") + "</div>" +
-      '<div class="tg">' + (p.connected === false ? "مقطوع" : "جاهز") + "</div></div>";
+      '<div class="tg">' + (p.connected === false ? "مقطوع" : "جاهز") + "</div>" +
+      (isHost && !p.isHost
+        ? '<button data-a="kick:' + p.id + '" title="اطلعه برّا" style="flex:none;margin-inline-start:8px;width:26px;height:26px;' +
+          "border-radius:50%;border:1px solid rgba(209,72,63,.5);background:rgba(209,72,63,.16);color:#F0A9A3;" +
+          "font-size:14px;line-height:1;cursor:pointer;padding:0\">×</button>"
+        : "") +
+      "</div>";
   });
   h += "</div></div>";
 
@@ -2240,6 +2269,35 @@ function voteScreen() {
       esc(p.name) + (picked ? '<div class="pickVoted">مختار</div>' : (p.voted ? '<div class="pickVoted">صوّت</div>' : "")) + "</button>";
   });
   h += "</div>";
+
+  // كارت خاص بيك: كام واحد صوّت عليك إنت — من غير أسامي، عشان تعرف موقفك
+  var meRow = state.players.find(function (p) { return p.id === state.you.id; });
+  if (meRow && state.you.alive) {
+    var myVotes = meRow.votesOn || 0;
+    var voters = state.you.myVoters || [];
+    var danger = myVotes > 0;
+    h += '<div style="margin-top:12px;border-radius:14px;padding:12px 13px;' +
+      "border:1px solid " + (danger ? "rgba(209,72,63,.5)" : "rgba(255,255,255,.1)") + ";" +
+      "background:" + (danger ? "rgba(209,72,63,.14)" : "rgba(255,255,255,.03)") + "\">" +
+      '<div style="display:flex;align-items:center;gap:11px">' +
+      '<span style="font-size:20px">' + (danger ? "🎯" : "🛡️") + "</span>" +
+      '<div style="flex:1;min-width:0">' +
+      '<div style="font-size:12px;color:var(--muted);font-weight:700">الأصوات اللي عليك إنت</div>' +
+      '<div style="font-size:13px;color:var(--parch);margin-top:2px">' +
+      (danger ? "دافع عن نفسك!" : "محدش صوّت عليك لسه") + "</div></div>" +
+      '<div style="font-family:var(--disp);font-size:30px;color:' + (danger ? "var(--madder)" : "var(--faint)") + '">' +
+      ar(myVotes) + "</div></div>";
+    if (voters.length) {
+      h += '<div style="margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,.09)">' +
+        '<div style="font-size:11.5px;color:var(--muted);font-weight:700;margin-bottom:5px">صوّتوا عليك:</div><div>' +
+        voters.map(function (nm) {
+          return '<span style="display:inline-block;background:rgba(209,72,63,.2);border:1px solid rgba(209,72,63,.45);' +
+            "color:var(--parch);font-size:12.5px;font-weight:700;border-radius:9px;padding:4px 9px;margin:0 0 5px 5px\">" +
+            esc(nm) + "</span>";
+        }).join("") + "</div></div>";
+    }
+    h += "</div>";
+  }
 
   if (canVote) {
     var n = voteSel.length;
@@ -2504,8 +2562,10 @@ function renderMoreMenu() {
   if (chatAvailable()) rows += '<button data-a="moreChat" style="' + itemStyle + '">💬 الشات' +
     (unread > 0 ? '<span style="background:var(--madder);color:#fff;font-size:10px;font-weight:800;border-radius:50%;' +
       'width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-inline-start:auto">' + Math.min(unread, 9) + '</span>' : '') + '</button>';
-  if (state && state.you && state.you.isHost && state.phase !== "lobby")
+  if (state && state.you && state.you.isHost && state.phase !== "lobby") {
     rows += '<button data-a="undoStep" style="' + itemStyle + '">↶ رجوع للخطوة السابقة</button>';
+    rows += '<button data-a="backToLobby" style="' + itemStyle + '">🔄 إبدأ من جديد</button>';
+  }
   rows += '<button data-a="moreSound" style="' + itemStyle + '">' + (soundOn ? "🔊 الأصوات ✓" : "🔇 الأصوات") + '</button>';
   rows += '<button data-a="moreLandscape" style="' + itemStyle + '">⛶ وضع العرض العريض' + (landscapeMode ? " ✓" : "") + '</button>';
   if (!host) {
@@ -2572,6 +2632,15 @@ document.addEventListener("click", function (e) {
   if (e.target && e.target.id === "morebtn") { moreMenuOpen = !moreMenuOpen; renderMoreMenu(); return; }
   var moreChatBtn = e.target.closest && e.target.closest('[data-a="moreChat"]');
   if (moreChatBtn) { chatOpen = !chatOpen; moreMenuOpen = false; renderChatPanel(); renderMoreMenu(); return; }
+  var lobbyBtn = e.target.closest && e.target.closest('[data-a="backToLobby"]');
+  if (lobbyBtn) {
+    moreMenuOpen = false; renderMoreMenu();
+    if (confirm("هترجع لشاشة الأوضة وتبدأ لعبة جديدة؟ اللعبة الحالية هتتلغي.")) {
+      if (client) client.send({ t: "again" });
+      buzz(30);
+    }
+    return;
+  }
   var undoBtn = e.target.closest && e.target.closest('[data-a="undoStep"]');
   if (undoBtn) {
     moreMenuOpen = false; renderMoreMenu();
@@ -3225,6 +3294,12 @@ appEl.addEventListener("click", async function (e) {
   if (k === "start") { client.send({ t: "start" }); return; }
   if (k === "seen") { client.send({ t: "seen" }); return; }
   if (k === "next") { client.send({ t: "next" }); return; }
+  if (k === "kick") {
+    var kickId = Number(parts[1]);
+    var kp = state.players.find(function (x) { return x.id === kickId; });
+    if (kp && confirm("تطلّع " + kp.name + " برّا الأوضة؟")) client.send({ t: "kick", id: kickId });
+    return;
+  }
   if (k === "voteStat") { voteStatIdx = Number(parts[1]); renderVoteStat(); return; }
   if (k === "votePick") {
     var vid = Number(parts[1]);
