@@ -101,6 +101,35 @@ p.d{font-size:15px;line-height:1.75;color:var(--muted);margin:0}
   color:var(--gc);background:rgba(255,255,255,.06);border-radius:8px;padding:3px 8px}
 .gcard-arr{flex:none;color:var(--gc);font-size:22px}
 .orline{display:flex;align-items:center;gap:12px;margin:16px 2px 12px;color:var(--faint);font-size:12px}
+.catgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.catcard{display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 6px;border-radius:14px;
+  border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);cursor:pointer;transition:transform .1s}
+.catcard:active{transform:scale(.96)}
+.catcard.sel{border-color:var(--violet);background:rgba(165,118,228,.18);box-shadow:0 4px 14px rgba(165,118,228,.25)}
+.catemo{font-size:26px}
+.catname{font-size:12.5px;font-weight:700;color:var(--parch)}
+.mycard{position:relative;border-radius:20px;padding:22px 18px;text-align:center;margin-bottom:12px;
+  background:repeating-linear-gradient(45deg,#2A2255,#2A2255 12px,#241E4C 12px,#241E4C 24px);
+  border:2px dashed rgba(255,255,255,.15)}
+.mycard.active{border-color:var(--saffron);box-shadow:0 0 0 3px rgba(240,174,69,.15),0 10px 26px rgba(0,0,0,.4)}
+.mycard-q{font-family:var(--disp);font-size:56px;color:var(--saffron);line-height:1}
+.mycard-t{font-family:var(--disp);font-size:19px;color:var(--parch);margin-top:4px}
+.mycard-s{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.6}
+.turnbar{border-radius:14px;padding:12px 14px;font-size:14px;font-weight:700;text-align:center;color:var(--muted);
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+.turnbar.you{color:#2A1A02;background:linear-gradient(180deg,var(--gold),var(--saffron));border:0;
+  box-shadow:0 5px 16px rgba(240,174,69,.3)}
+.turnbar b{color:var(--parch)}
+.turnbar.you b{color:#2A1A02}
+.gprow{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line)}
+.gprow:last-child{border-bottom:0}
+.gprow.turn{background:rgba(240,174,69,.06);border-radius:10px;padding:9px 8px;margin:0 -8px;border-bottom:0}
+.gp-emo{font-size:26px;flex:none;width:34px;text-align:center}
+.gp-name{flex:1;font-weight:700;font-size:14.5px;color:var(--parch);min-width:0}
+.gp-score{font-family:var(--disp);font-size:22px;color:var(--saffron);min-width:24px;text-align:center}
+.flash{border-radius:13px;padding:11px 13px;font-size:13.5px;text-align:center;margin-bottom:12px;font-weight:700}
+.flash.ok{background:rgba(55,179,156,.16);border:1px solid rgba(55,179,156,.4);color:var(--parch)}
+.flash.no{background:rgba(224,82,72,.14);border:1px solid rgba(224,82,72,.4);color:var(--parch)}
 .orline::before,.orline::after{content:"";flex:1;height:1px;background:var(--line)}
 .codebox{display:flex;gap:8px}
 .codein{flex:1;text-align:center;letter-spacing:8px;font-family:var(--disp);font-size:24px;text-transform:uppercase}
@@ -1553,6 +1582,236 @@ else global.Engine = EngineExports;
 
 </script>
 <script>
+
+/* ============================================================================
+ * لعبة "اعرف الكارت" — محرّك مستقل
+ * تصميم وتطوير: فرحات زايد · © 2026
+ *
+ * ٢–٦ لاعيبة. بيختاروا فئة (أكلات، خضار، أجهزة، لاعيبة كورة، أفلام...).
+ * كل لاعب عنده "كارت" (حاجة من الفئة) — بس هو نفسه *مش شايفه*، الباقي
+ * شايفينه. بالدور كل واحد بيسأل سؤال عن كارته عشان يخمّنه. أول ما يعرف
+ * بيدوس تخمين؛ صح = نقطة وكارت جديد. اللي يجمع أكتر نقط يكسب.
+ * ========================================================================== */
+(function (root) {
+  "use strict";
+  var now = () => Date.now();
+
+  var CATS = [
+    { id: "food",    name: "أكلات",          emoji: "🍽️", items: [
+      ["كشري","🍛"],["ملوخية","🥬"],["فراخ","🍗"],["بيتزا","🍕"],["كبدة","🥩"],["فول","🫘"],
+      ["طعمية","🧆"],["كفتة","🍡"],["مكرونة","🍝"],["سمك","🐟"],["رز","🍚"],["حواوشي","🥙"],
+      ["شاورما","🌯"],["برجر","🍔"],["فطير","🥞"],["محشي","🫑"],["بطاطس","🍟"],["بيض","🍳"] ] },
+    { id: "veg",     name: "خضار وفاكهة",     emoji: "🥕", items: [
+      ["طماطم","🍅"],["خيار","🥒"],["جزر","🥕"],["بصل","🧅"],["فلفل","🫑"],["باذنجان","🍆"],
+      ["بطاطس","🥔"],["موز","🍌"],["تفاح","🍎"],["برتقان","🍊"],["عنب","🍇"],["بطيخ","🍉"],
+      ["مانجا","🥭"],["فراولة","🍓"],["ليمون","🍋"],["ذرة","🌽"],["ثوم","🧄"],["مشروم","🍄"] ] },
+    { id: "home",    name: "أجهزة منزلية",    emoji: "🏠", items: [
+      ["تلاجة","🧊"],["غسالة","🌀"],["تلفزيون","📺"],["مروحة","💨"],["مكواة","👔"],["ميكروويف","📡"],
+      ["خلاط","🥤"],["مكنسة","🧹"],["تكييف","❄️"],["سخان","🔥"],["فرن","🍞"],["راديو","📻"],
+      ["موبايل","📱"],["لابتوب","💻"],["كاميرا","📷"],["ساعة","⏰"],["لمبة","💡"],["تليفون","☎️"] ] },
+    { id: "ball",    name: "لاعيبة كورة",      emoji: "⚽", items: [
+      ["صلاح","🇪🇬"],["ميسي","🐐"],["رونالدو","🚀"],["نيمار","🇧🇷"],["مبابي","⚡"],["بنزيما","🇫🇷"],
+      ["حاجي","🧤"],["أبو تريكة","👑"],["زيدان","🎩"],["رونالدينهو","😁"],["كاكا","✝️"],["هالاند","🤖"],
+      ["ديبرويني","🅱️"],["مودريتش","🎾"],["ڤان دايك","🧱"],["نيمار","🎪"],["حكيمي","🇲🇦"],["ماني","🦁"] ] },
+    { id: "arfilm",  name: "أفلام عربي",       emoji: "🎬", items: [
+      ["الإرهاب والكباب","🍢"],["اللمبي","🤪"],["الناظر","🏫"],["صعيدي في الجامعة","🎓"],
+      ["عسل أسود","🍯"],["ابن العم","🔫"],["إسماعيلية رايح جاي","🚌"],["حسن ومرقص","🕊️"],
+      ["كباريه","💃"],["الفيل الأزرق","🐘"],["واحد صعيدي","🌾"],["الكيت كات","🚲"],
+      ["عمارة يعقوبيان","🏢"],["تيمور وشفيقة","👮"],["جعلتني مجرمًا","😔"],["فيلم ثقافي","🎞️"] ] },
+    { id: "animal",  name: "حيوانات",          emoji: "🦁", items: [
+      ["أسد","🦁"],["فيل","🐘"],["قرد","🐒"],["حصان","🐴"],["جمل","🐪"],["قطة","🐈"],
+      ["كلب","🐕"],["أرنب","🐇"],["دب","🐻"],["نمر","🐅"],["زرافة","🦒"],["تمساح","🐊"],
+      ["بطة","🦆"],["ديك","🐓"],["حمار","🫏"],["خروف","🐑"],["فأر","🐁"],["ثعبان","🐍"] ] },
+    { id: "job",     name: "وظايف",            emoji: "💼", items: [
+      ["دكتور","🩺"],["مهندس","📐"],["مدرس","📚"],["طباخ","👨‍🍳"],["سواق","🚗"],["نجار","🪵"],
+      ["حداد","🔨"],["كهربائي","💡"],["جزار","🔪"],["فلاح","🌾"],["طيار","✈️"],["بوليس","👮"],
+      ["إطفائي","🧯"],["حلاق","💈"],["خباز","🍞"],["صياد","🎣"],["ممثل","🎭"],["مغني","🎤"] ] },
+    { id: "place",   name: "أماكن",            emoji: "🗺️", items: [
+      ["الأهرامات","🔺"],["البحر","🌊"],["الجامع","🕌"],["المدرسة","🏫"],["المستشفى","🏥"],["السوق","🛒"],
+      ["الملعب","🏟️"],["السينما","🎬"],["المطار","🛫"],["الحديقة","🌳"],["الشاطئ","🏖️"],["الجبل","⛰️"],
+      ["المطعم","🍴"],["البنك","🏦"],["المحطة","🚉"],["الصيدلية","💊"],["الكافيه","☕"],["النادي","🏊"] ] },
+  ];
+
+  function shuffle(a){a=a.slice();for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;}
+
+  var DEFAULT_CFG = { catId: "food", target: 5 }; // target = نقط المكسب
+
+  function findPlayer(s,id){for(var i=0;i<s.players.length;i++)if(s.players[i].id===id)return s.players[i];return null;}
+
+  function createRoom(code, hostId) {
+    return {
+      game: "guess",
+      code: code, hostId: hostId,
+      phase: "lobby",   // lobby | play | over
+      cfg: Object.assign({}, DEFAULT_CFG),
+      cfgTouched: false,
+      players: [],       // {id,name,token,connected,score, card:[name,emoji], guessed:bool}
+      turn: null,        // id اللاعب اللي دوره يسأل
+      turnOrder: [],
+      pool: [],          // كروت متبقية من الفئة
+      lastEvent: null,   // {type:'correct'|'wrong', name, word}
+      winner: null,
+      version: 1,
+    };
+  }
+
+  function addPlayer(s,p){
+    if(s.phase!=="lobby") throw new Error("اللعبة بدأت — استنى الجولة الجاية.");
+    if(s.players.length>=6) throw new Error("اللعبة دي لحد ٦ لاعيبة.");
+    var name=String(p.name||"").trim().slice(0,14)||("لاعب "+(s.players.length+1));
+    if(s.players.some(x=>x.name===name)) throw new Error("في حد بنفس الاسم — غيّره شوية.");
+    s.players.push({id:p.id,name:name,token:p.token,connected:true,score:0,card:null,guessed:false});
+    return s;
+  }
+  function removePlayer(s,id){
+    s.players=s.players.filter(p=>p.id!==id);
+    if(s.phase==="play"){
+      s.turnOrder=s.turnOrder.filter(x=>x!==id);
+      if(s.turn===id) advanceTurn(s);
+      if(s.players.length<2){ s.phase="over"; s.winner=topPlayer(s); }
+    }
+    return s;
+  }
+  function setConnected(s,id,on){var p=findPlayer(s,id);if(p)p.connected=on;return s;}
+
+  function validateCfg(c){
+    var out=Object.assign({},DEFAULT_CFG,c||{});
+    if(!CATS.some(k=>k.id===out.catId)) out.catId="food";
+    out.target=Math.max(3,Math.min(15,Number(out.target)||5));
+    return out;
+  }
+
+  function catById(id){ return CATS.find(k=>k.id===id)||CATS[0]; }
+
+  function refillPool(s){
+    var cat=catById(s.cfg.catId);
+    s.pool=shuffle(cat.items.slice());
+  }
+  function drawCard(s){
+    if(!s.pool.length) refillPool(s);
+    return s.pool.pop();
+  }
+  /** بيدّي اللاعب كارت جديد مختلف عن كارت أي حد تاني قد الإمكان */
+  function dealTo(s,p){
+    p.card=drawCard(s);
+    p.guessed=false;
+  }
+
+  function topPlayer(s){
+    var sorted=s.players.slice().sort((a,b)=>b.score-a.score);
+    return sorted[0]? {name:sorted[0].name,score:sorted[0].score}:null;
+  }
+
+  function beginGame(s){
+    s.phase="play";
+    s.winner=null; s.lastEvent=null;
+    s.players.forEach(p=>{p.score=0;});
+    refillPool(s);
+    s.players.forEach(p=>dealTo(s,p));
+    s.turnOrder=shuffle(s.players.map(p=>p.id));
+    s.turn=s.turnOrder[0];
+    return s;
+  }
+
+  function advanceTurn(s){
+    if(!s.turnOrder.length){s.turn=null;return s;}
+    var i=s.turnOrder.indexOf(s.turn);
+    for(var k=1;k<=s.turnOrder.length;k++){
+      var cand=s.turnOrder[(i+k)%s.turnOrder.length];
+      var p=findPlayer(s,cand);
+      if(p&&p.connected!==false){s.turn=cand;return s;}
+    }
+    s.turn=s.turnOrder[(i+1)%s.turnOrder.length];
+    return s;
+  }
+
+  /** اللاعب خلص سؤاله وبيدّي الدور للي بعده (من غير تخمين) */
+  function passTurn(s,id){
+    if(s.phase!=="play"||s.turn!==id) return s;
+    advanceTurn(s);
+    return s;
+  }
+
+  /** اللاعب بيدوس تخمين. بيقارن نص التخمين باسم كارته.
+   *  صح = +نقطة وكارت جديد ويكمّل دوره. غلط = بيعدّي الدور. */
+  function guess(s,id,text){
+    if(s.phase!=="play"||s.turn!==id) return { ok:false, reason:"مش دورك" };
+    var p=findPlayer(s,id);
+    if(!p||!p.card) return { ok:false, reason:"مفيش كارت" };
+    var target=normalize(p.card[0]);
+    var g=normalize(String(text||""));
+    if(!g) return { ok:false, reason:"اكتب تخمينك" };
+    var correct = g===target || (g.length>=2 && (target.indexOf(g)!==-1 || g.indexOf(target)!==-1));
+    if(correct){
+      p.score+=1;
+      s.lastEvent={type:"correct",name:p.name,word:p.card[0],emoji:p.card[1]};
+      if(p.score>=s.cfg.target){ s.phase="over"; s.winner={name:p.name,score:p.score}; return {ok:true,correct:true,over:true}; }
+      dealTo(s,p);       // كارت جديد
+      // بيكمّل دوره عشان ياخد أكتر من نقطة لو شاطر
+      return {ok:true,correct:true,over:false};
+    } else {
+      s.lastEvent={type:"wrong",name:p.name,word:String(text||"").slice(0,20)};
+      advanceTurn(s);    // غلط — الدور بيعدّي
+      return {ok:true,correct:false};
+    }
+  }
+
+  // بيشيل التشكيل والمسافات والألف/الياء عشان المقارنة تبقى مرنة
+  function normalize(x){
+    return String(x||"")
+      .replace(/[\u064B-\u0652]/g,"")          // تشكيل
+      .replace(/[إأآا]/g,"ا").replace(/ى/g,"ي").replace(/ة/g,"ه").replace(/ؤ/g,"و").replace(/ئ/g,"ي")
+      .replace(/\s+/g,"").trim();
+  }
+
+  function backToLobby(s){
+    s.phase="lobby"; s.turn=null; s.turnOrder=[]; s.pool=[]; s.lastEvent=null; s.winner=null;
+    s.players.forEach(p=>{p.score=0;p.card=null;p.guessed=false;});
+    return s;
+  }
+
+  /** اللقطة اللي بيشوفها لاعب: هو مش شايف كارته، بس شايف كروت الباقيين */
+  function viewFor(s,id){
+    var me=findPlayer(s,id);
+    var cat=catById(s.cfg.catId);
+    return {
+      game:"guess",
+      phase:s.phase, code:s.code, hostId:s.hostId,
+      cfg:s.cfg,
+      category:{ id:cat.id, name:cat.name, emoji:cat.emoji },
+      categories: CATS.map(k=>({id:k.id,name:k.name,emoji:k.emoji})),
+      target:s.cfg.target,
+      turn:s.turn,
+      turnName:(findPlayer(s,s.turn)||{}).name||null,
+      myTurn: s.turn===id,
+      lastEvent:s.lastEvent,
+      you: me? {
+        id:me.id, name:me.name, isHost:me.id===s.hostId, score:me.score,
+        // مهم: اللاعب *مش* بيشوف كارته هو
+        hasCard: !!me.card,
+      }:null,
+      players: s.players.map(p=>({
+        id:p.id, name:p.name, connected:p.connected, isHost:p.id===s.hostId, score:p.score,
+        isTurn:p.id===s.turn,
+        // بشوف كارت كل الناس ما عدا نفسي
+        card: (s.phase==="play" && p.id!==id && p.card)? {word:p.card[0],emoji:p.card[1]} : null,
+      })),
+      standings: s.players.map(p=>({name:p.name,score:p.score,isHost:p.id===s.hostId})).sort((a,b)=>b.score-a.score),
+      winner:(s.phase==="over")? (s.winner||topPlayer(s)) : null,
+    };
+  }
+
+  var Exports={
+    CATS, DEFAULT_CFG, createRoom, addPlayer, removePlayer, setConnected, validateCfg,
+    beginGame, guess, passTurn, advanceTurn, backToLobby, viewFor, findPlayer, catById, shuffle, normalize, dealTo,
+    setClock:(fn)=>{now=fn;},
+  };
+  if(typeof module!=="undefined"&&module.exports) module.exports=Exports;
+  else root.GuessGame=Exports;
+})(typeof window!=="undefined"?window:globalThis);
+
+</script>
+<script>
 /*
  * حرامية وأهل القرية — عقل المضيف (Host Brain)
  * © 2026 فرحات زايد — كل الحقوق محفوظة.
@@ -1572,6 +1831,8 @@ else global.Engine = EngineExports;
     this.game = game || "mafia";
     if (this.game === "task") {
       this.state = TaskGame.createRoom(code, null);
+    } else if (this.game === "guess") {
+      this.state = GuessGame.createRoom(code, null);
     } else {
       this.state = E.createRoom(code, null);
       this.state.chatEnabled = chatEnabled !== false; // افتراضيًا مفعّل لو محددش
@@ -1585,7 +1846,7 @@ else global.Engine = EngineExports;
     this.state.hostId = this.uidToId[hostUid];
   }
 
-  HostBrain.prototype.eng = function () { return this.game === "task" ? TaskGame : E; };
+  HostBrain.prototype.eng = function () { return this.game === "task" ? TaskGame : this.game === "guess" ? GuessGame : E; };
 
   HostBrain.prototype.addPlayer = function (uid, name) {
     if (uid in this.uidToId) return this.uidToId[uid];
@@ -1660,7 +1921,7 @@ else global.Engine = EngineExports;
   var STEP_ACTIONS = {
     start: 1, forceVote: 1, tallyNext: 1, revote: 1, runoff: 1, morningNext: 1,
     next: 1, night: 1, vote: 1, again: 1, restart: 1, startTimer: 1, kick: 1,
-    start: 1, endRound: 1, nextRound: 1,
+    start: 1, endRound: 1, nextRound: 1, guess: 1, pass: 1,
   };
 
   HostBrain.prototype.snapshot = function () {
@@ -1695,6 +1956,44 @@ else global.Engine = EngineExports;
       var isHost = s.hostId === id;
 
       if (STEP_ACTIONS[msg.t]) this.snapshot();
+
+      // ===== لعبة اعرف الكارت: مسار منفصل =====
+      if (this.game === "guess") {
+        var Gm = GuessGame;
+        switch (msg.t) {
+          case "cfg": {
+            if (!isHost || s.phase !== "lobby") return;
+            s.cfg = Gm.validateCfg(Object.assign({}, s.cfg, msg.cfg || {}));
+            s.cfgTouched = true;
+            break;
+          }
+          case "kick": {
+            if (!isHost || s.phase !== "lobby") return;
+            var gkid = Number(msg.id);
+            if (gkid === s.hostId) return;
+            Gm.removePlayer(s, gkid);
+            break;
+          }
+          case "start": {
+            if (!isHost || s.phase !== "lobby") return;
+            if (s.players.length < 2) return;
+            Gm.beginGame(s);
+            break;
+          }
+          case "guess": { Gm.guess(s, id, msg.text); break; }
+          case "pass": { Gm.passTurn(s, id); break; }
+          case "again": { if (!isHost) return; Gm.backToLobby(s); break; }
+          case "leave": {
+            Gm.removePlayer(s, id);
+            if (id === s.hostId && s.players.length) s.hostId = s.players[0].id;
+            break;
+          }
+          case "undo": { if (isHost && this.undo()) { this.armTimer(); this.afterChange(); } return; }
+          default: return;
+        }
+        this.afterChange();
+        return;
+      }
 
       // ===== لعبة المهمة السرية: مسار منفصل تمامًا =====
       if (this.game === "task") {
@@ -1940,10 +2239,24 @@ else global.Engine = EngineExports;
   var HostBrain = (typeof module !== "undefined" && module.exports) ? require("./hostbrain.js") : global.HostBrain;
   var E = (typeof module !== "undefined" && module.exports) ? require("./engine.js") : global.Engine;
 
-  function makeCode() {
-    var A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", c = "";
-    for (var i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)];
-    return c;
+  function makeCode() { return String(Math.floor(Math.random() * 10)); }
+
+  /** بيدوّر على رقم فاضي من ٠ لـ٩ مش مستعمل في أوضة تانية دلوقتي */
+  function freeCode(backend) {
+    var order = [0,1,2,3,4,5,6,7,8,9];
+    for (var i = order.length - 1; i > 0; i--) { var j = Math.floor(Math.random()*(i+1)); var t=order[i]; order[i]=order[j]; order[j]=t; }
+    var idx = 0;
+    function tryNext() {
+      if (idx >= order.length) return Promise.resolve(String(Math.floor(Math.random()*10))); // كلهم مشغولين — ناخد أي رقم
+      var c = String(order[idx++]);
+      return backend.readOnce("rooms/" + c + "/meta").then(function (m) {
+        // فاضي، أو أوضة قديمة مهجورة (المضيف مش موجود من زمان) — ينفع نعيد استخدامها
+        if (!m) return c;
+        if (m.hostHeartbeat && (backend.now() - m.hostHeartbeat) > 5 * 60 * 1000) return c;
+        return tryNext();
+      }).catch(function () { return c; });
+    }
+    return tryNext();
   }
 
   function GameClient(backend, uid, name) {
@@ -1967,12 +2280,14 @@ else global.Engine = EngineExports;
 
   GameClient.prototype.createRoom = function (chatEnabled, game) {
     this._cleanup();
-    var code = makeCode();
-    this.code = code; this.isHost = true;
-    this.hostBrain = new HostBrain(this.backend, code, this.uid, this.name, chatEnabled, game);
-    this._listen();
-    this.hostBrain.broadcast();
-    return code;
+    var self = this;
+    return freeCode(this.backend).then(function (code) {
+      self.code = code; self.isHost = true;
+      self.hostBrain = new HostBrain(self.backend, code, self.uid, self.name, chatEnabled, game);
+      self._listen();
+      self.hostBrain.broadcast();
+      return code;
+    });
   };
 
   GameClient.prototype.joinRoom = function (code) {
@@ -2336,6 +2651,7 @@ var conn = "connecting";  // connecting | ready | error
 var connError = "";
 var uiSheet = null;
 var joinCode = "";
+var guessText = "";
 var myName = localStorage.getItem("haramia-name") || "";
 var savedSession = null;
 try { savedSession = JSON.parse(localStorage.getItem("haramia-session") || "null"); } catch (e) {}
@@ -2538,11 +2854,11 @@ document.addEventListener("visibilitychange", function () {
   if (document.visibilityState === "visible" && client) keepAwake();
 });
 
-function doCreate(game) {
+async function doCreate(game) {
   if (!myName.trim()) return;
   try { localStorage.setItem("haramia-name", myName.trim()); } catch (e) {}
   makeClient(myName.trim());
-  client.createRoom(true, game || "mafia");
+  await client.createRoom(true, game || "mafia");
   if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
   watchHostHeartbeat(client.code);
   saveSession();
@@ -2551,9 +2867,9 @@ function doCreate(game) {
   render();
 }
 async function doJoin() {
-  var code = joinCode.trim().toUpperCase();
+  var code = joinCode.trim();
   if (!myName.trim()) { connError = "اكتب اسمك الأول."; render(); return; }
-  if (code.length !== 4) { connError = "الكود لازم يكون ٤ حروف."; render(); return; }
+  if (!/^[0-9]$/.test(code)) { connError = "الرقم لازم يكون خانة واحدة من ٠ لـ٩."; render(); return; }
   try { localStorage.setItem("haramia-name", myName.trim()); } catch (e) {}
   makeClient(myName.trim());
   var exists = await client.roomExists(code);
@@ -2653,6 +2969,15 @@ function view() {
   }
 
   var body = "";
+  if (state.game === "guess") {
+    switch (state.phase) {
+      case "lobby": body = guessLobbyScreen(); break;
+      case "play": body = guessPlayScreen(); break;
+      case "over": body = guessOverScreen(); break;
+      default: body = '<div class="mid ctr"><div class="spin"></div></div>';
+    }
+    return netBar() + body + footer() + uiSheetHTML();
+  }
   if (state.game === "task") {
     switch (state.phase) {
       case "lobby": body = taskLobbyScreen(); break;
@@ -2698,31 +3023,35 @@ function homeScreen() {
     h += '<div class="stack" style="gap:13px">';
     h += gameCard("mafia", "حرامية وأهل القرية", "لعبة أدوار وخداع — لاقوا الحرامية قبل ما يكسبوا", "thief", "var(--madder)", "٥–١٥ لاعب");
     h += gameCard("task", "المهمة السرية", "كل واحد معاه مهمة سرية ينفّذها من غير ما حد ياخد باله", "villager", "var(--teal)", "٣–١٥ لاعب");
+    h += gameCard("guess", "اعرف الكارت", "معاك كارت إنت مش شايفه — اسأل الباقي لحد ما تعرفه", "cop", "var(--violet)", "٢–٦ لاعيبة");
     h += "</div>";
     if (connError) h += '<div class="errbox" style="margin-top:12px">' + esc(connError) + "</div>";
     return h;
   }
 
   // شاشة الاسم + إنشاء/دخول أوضة للّعبة المختارة
-  var isTask = pickedGame === "task";
-  var title = isTask ? "المهمة السرية" : "حرامية وأهل القرية";
-  var accent = isTask ? "var(--teal)" : "var(--madder)";
+  var GMETA = {
+    mafia: { title: "حرامية وأهل القرية", accent: "var(--madder)", emblem: "thief",
+      desc: "كل واحد ياخد دور سري. أهل القرية بيدوّروا على الحرامية بالتصويت.", about: "الأدوار وقواعد اللعب" },
+    task: { title: "المهمة السرية", accent: "var(--teal)", emblem: "villager",
+      desc: "قاعدين بتتكلموا عادي، وكل واحد بينفّذ مهمته في السر. اللي يتكشف يخسر.", about: "إزاي بنلعب" },
+    guess: { title: "اعرف الكارت", accent: "var(--violet)", emblem: "cop",
+      desc: "معاك كارت إنت مش شايفه، والباقي شايفينه. اسأل بالدور لحد ما تعرفه.", about: "إزاي بنلعب" }
+  };
+  var gm = GMETA[pickedGame] || GMETA.mafia;
   var g = '<button class="btn ghost sm" style="width:auto;margin:2px 0 6px;padding:8px 14px;font-size:14px" data-a="backToGames">→ كل الألعاب</button>';
   g += '<div class="mid" style="padding-top:2px"><div class="ctr fade">' +
-    '<div class="brandmark" style="--mc:' + accent + '">' + ctrEmblem(isTask ? "villager" : "thief", 56, accent) + "</div>" +
-    '<h1 class="logo" style="margin-top:10px;font-size:30px;-webkit-text-fill-color:var(--parch);background:none;filter:none">' + title + "</h1>" +
-    '<p class="d" style="max-width:290px;margin:10px auto 0">' +
-    (isTask ? "قاعدين بتتكلموا عادي، وكل واحد بينفّذ مهمته في السر. اللي يتكشف يخسر."
-      : "كل واحد ياخد دور سري. أهل القرية بيدوّروا على الحرامية بالتصويت.") + "</p></div></div>";
+    '<div class="brandmark" style="--mc:' + gm.accent + '">' + ctrEmblem(gm.emblem, 56, gm.accent) + "</div>" +
+    '<h1 class="logo" style="margin-top:10px;font-size:30px;-webkit-text-fill-color:var(--parch);background:none;filter:none">' + gm.title + "</h1>" +
+    '<p class="d" style="max-width:290px;margin:10px auto 0">' + gm.desc + "</p></div></div>";
   g += '<div class="stack">' +
     '<input class="input" placeholder="اكتب اسمك" maxlength="14" value="' + esc(myName) + '" data-bind="name">' +
     '<button class="btn" data-a="createGame">اعمل أوضة جديدة</button></div>';
-  // دخول بكود — جوّه اللعبة نفسها زي ما طلبت
   g += '<div class="orline"><span>أو ادخل أوضة موجودة</span></div>';
   g += '<div class="codebox">' +
-    '<input class="input codein" placeholder="الكود" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
-    '<button class="btn dark" style="margin:0" data-a="join">ادخل بالكود</button></div>';
-  g += '<button class="btn ghost sm mt" data-a="about">' + (isTask ? "إزاي بنلعب" : "الأدوار وقواعد اللعب") + "</button>";
+    '<input class="input codein" placeholder="الرقم" inputmode="numeric" maxlength="1" data-bind="code" value="' + esc(joinCode) + '">' +
+    '<button class="btn dark" style="margin:0" data-a="join">ادخل بالرقم</button></div>';
+  g += '<button class="btn ghost sm mt" data-a="about">' + gm.about + "</button>";
   return g;
 }
 
@@ -3317,6 +3646,20 @@ function voteHistoryHTML() {
 function uiSheetHTML() {
   if (!uiSheet) return "";
   if (uiSheet.t === "about") {
+    if (uiSheet.game === "guess") {
+      return '<div class="sheet" data-a="closeSheet"><div class="sheetin" data-stop="1"><p class="eb">اعرف الكارت</p>' +
+        '<p class="d" style="font-size:14px;line-height:1.8">لعبة سريعة لـ٢–٦ لاعيبة. بتختاروا موضوع (أكلات، حيوانات، أفلام...) وكل واحد بياخد كارت من الموضوع ده — <b style="color:var(--parch)">بس هو نفسه مش شايفه</b>، الباقي كلهم شايفينه.</p>' +
+        '<p class="eb" style="margin-top:18px">إزاي بتلعب</p>' +
+        '<div style="font-size:13.5px;color:var(--muted);line-height:1.9">' +
+        '• بالدور، كل واحد بيسأل أسئلة عن كارته: "أنا أكل؟ أنا حلو؟ بيتاكل نيّ؟"<br>' +
+        '• الباقي بيجاوبوا بصراحة (آه/لأ).<br>' +
+        '• أول ما تحس إنك عرفت، دوس <b style="color:var(--parch)">خمّن</b> واكتب اللي في دماغك.<br>' +
+        '• صح = <b style="color:var(--parch)">+نقطة</b>، وتاخد كارت جديد وتكمّل دورك.<br>' +
+        '• غلط = الدور بيعدّي للي بعدك.<br>' +
+        '• أول واحد يوصل نقط المكسب يكسب.</div>' +
+        '<p class="d" style="font-size:13px;line-height:1.7;margin-top:16px">نصيحة: اسأل أسئلة تقسّم الاحتمالات (حي ولا جماد؟) قبل ما تخمّن.</p>' +
+        '<button class="btn ghost mt" data-a="closeSheet">تمام</button></div></div>';
+    }
     if (uiSheet.game === "task") {
       var ht = '<div class="sheet" data-a="closeSheet"><div class="sheetin" data-stop="1"><p class="eb">المهمة السرية</p>' +
         '<p class="d" style="font-size:14px;line-height:1.8">لعبة بتتلعب جوّه قعدتكم العادية. مفيش أدوار ولا لف — إنتوا قاعدين بتتكلموا طبيعي، وكل واحد معاه مهمة سرية على موبايله ينفّذها من غير ما حد ياخد باله.</p>' +
@@ -4225,6 +4568,118 @@ function voiceSync() {
 
 /* ==================== شاشات لعبة المهمة السرية ==================== */
 
+
+/* ==================== شاشات لعبة اعرف الكارت ==================== */
+
+function guessLobbyScreen() {
+  var isHost = state.you.isHost, n = state.players.length, cfg = state.cfg;
+  var h = '<div class="fade">';
+  h += '<p class="eb">رقم الأوضة — قوله لأصحابك</p><div class="codebig">' + ar(state.code) + "</div>" +
+    '<p class="codehint">يفتحوا نفس اللينك ويكتبوا الرقم ده</p></div>';
+
+  h += '<div class="card mt"><p class="eb">اللاعبين (' + ar(n) + " من ٦)</p><div class=\"plist\">";
+  state.players.forEach(function (p) {
+    h += '<div class="prow"><div class="dotc' + (p.connected === false ? " off" : "") + '"></div>' +
+      '<div class="nm">' + esc(p.name) + (p.isHost ? " ★" : "") + "</div>" +
+      '<div class="tg">' + (p.connected === false ? "مقطوع" : "جاهز") + "</div>" +
+      (isHost && !p.isHost ? '<button data-a="kick:' + p.id + '" style="flex:none;margin-inline-start:8px;width:26px;height:26px;border-radius:50%;border:1px solid rgba(209,72,63,.5);background:rgba(209,72,63,.16);color:#F0A9A3;font-size:14px;line-height:1;cursor:pointer;padding:0">×</button>' : "") +
+      "</div>";
+  });
+  h += "</div></div>";
+
+  if (isHost) {
+    // اختيار الفئة
+    h += '<div class="card mt"><p class="eb">اختار الموضوع</p><div class="catgrid">';
+    (state.categories || []).forEach(function (c) {
+      var sel = c.id === cfg.catId;
+      h += '<button data-a="cat:' + c.id + '" class="catcard' + (sel ? " sel" : "") + '">' +
+        '<span class="catemo">' + c.emoji + "</span><span class=\"catname\">" + esc(c.name) + "</span></button>";
+    });
+    h += "</div></div>";
+    // نقط المكسب
+    h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
+      '<span style="display:flex;font-size:19px">🏁</span><div><div class="swt">نقط المكسب</div><div class="sws">أول واحد يوصلها يكسب</div></div></div>' +
+      '<div class="step"><button data-a="gtarget:-1">−</button><div class="v">' + ar(cfg.target) + '</div><button data-a="gtarget:1">+</button></div></div>';
+    h += '<div class="soft mt"><div style="font-size:12.5px;color:var(--muted);line-height:1.7">' +
+      "كل واحد معاه كارت <b style=\"color:var(--parch)\">هو مش شايفه</b>، بس الباقي شايفينه. بالدور تسأل أسئلة عن كارتك (\"أنا أكل؟ أنا حلو؟\") وأول ما تعرفه دوس تخمين. صح = نقطة وكارت جديد وتكمّل.</div></div>";
+    if (n < 2) h += '<p class="d ctr mt">محتاجين ٢ على الأقل.</p>';
+    else h += '<button class="btn mt" data-a="start">يلا نلعب</button>';
+  } else {
+    h += '<p class="d ctr mt">مستنيين المضيف يبدأ… الموضوع: <b style="color:var(--parch)">' +
+      (state.category ? state.category.emoji + " " + esc(state.category.name) : "لسه") + "</b></p>";
+  }
+  return h + "</div>";
+}
+
+function guessPlayScreen() {
+  var you = state.you, myTurn = state.myTurn;
+  var me = state.players.find(function (p) { return p.id === you.id; });
+  var h = '<div class="fade"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+    '<p class="eb" style="margin:0">' + (state.category ? state.category.emoji + " " + esc(state.category.name) : "") + "</p>" +
+    '<span style="font-size:13px;color:var(--muted)">المكسب: ' + ar(state.target) + " نقطة</span></div>";
+
+  // حدث آخر تخمين
+  if (state.lastEvent) {
+    var e = state.lastEvent;
+    if (e.type === "correct")
+      h += '<div class="flash ok">🎉 ' + esc(e.name) + " عرف إنه " + (e.emoji || "") + " <b>" + esc(e.word) + "</b>!</div>";
+    else
+      h += '<div class="flash no">❌ ' + esc(e.name) + ' خمّن "' + esc(e.word) + '" وطلع غلط</div>';
+  }
+
+  // كارتي أنا — مغطّى (مش شايفه)
+  h += '<div class="mycard' + (myTurn ? " active" : "") + '">' +
+    '<div class="mycard-q">؟</div>' +
+    '<div class="mycard-t">الكارت بتاعك</div>' +
+    '<div class="mycard-s">إنت مش شايفه — الباقي شايفينه. اسأل عشان تعرفه.</div></div>';
+
+  // دور مين
+  if (myTurn) {
+    h += '<div class="turnbar you">🎤 دورك دلوقتي — اسأل أو خمّن</div>';
+    h += '<div class="codebox mt"><input class="input" id="guessInput" placeholder="اكتب تخمينك…" maxlength="24" data-bind="guess" value="' + esc(guessText || "") + '">' +
+      '<button class="btn" style="margin:0;width:auto;padding:15px 20px" data-a="guessSubmit">خمّن</button></div>';
+    h += '<button class="btn dark sm mt" data-a="pass">سيب الدور للي بعدي</button>';
+  } else {
+    h += '<div class="turnbar">🔈 دور <b>' + esc(state.turnName || "") + "</b> — جاوبوا على أسئلته بصراحة</div>";
+  }
+
+  // الباقيين وكروتهم (اللي أنا شايفها)
+  h += '<div class="card mt"><p class="eb">كروت الباقيين</p>';
+  state.players.forEach(function (p) {
+    if (p.id === you.id) {
+      h += '<div class="gprow' + (p.isTurn ? " turn" : "") + '"><div class="gp-emo">🫥</div>' +
+        '<div class="gp-name">' + esc(p.name) + ' <span style="color:var(--faint)">(إنت)</span></div>' +
+        '<div class="gp-score">' + ar(p.score) + "</div></div>";
+    } else {
+      h += '<div class="gprow' + (p.isTurn ? " turn" : "") + '"><div class="gp-emo">' + (p.card ? p.card.emoji : "🃏") + "</div>" +
+        '<div class="gp-name">' + esc(p.name) + (p.card ? ' <span style="color:var(--faint)">' + esc(p.card.word) + "</span>" : "") +
+        (p.isTurn ? ' <span style="color:var(--saffron);font-size:11px">• دوره</span>' : "") + "</div>" +
+        '<div class="gp-score">' + ar(p.score) + "</div></div>";
+    }
+  });
+  h += "</div>";
+
+  if (state.you.isHost) h += '<button class="btn ghost sm mt" style="font-size:12.5px" data-a="again">أنهي اللعبة وارجع للأوضة</button>';
+  return h + "</div>";
+}
+
+function guessOverScreen() {
+  var w = state.winner || (state.standings && state.standings[0]);
+  var h = '<div class="fade ctr"><p class="eb">خلصت اللعبة</p>';
+  if (w) {
+    h += '<div style="font-size:56px;margin:10px 0">🏆</div>';
+    h += '<h1 class="t">' + esc(w.name) + "</h1><p class=\"d\" style=\"margin-bottom:14px\">كسب بـ " + ar(w.score) + " نقطة</p>";
+  }
+  h += '<div class="card" style="text-align:right">';
+  (state.standings || []).forEach(function (sc, i) {
+    h += '<div class="vr' + (i === 0 ? " lead" : "") + '"><div class="nm">' + (i === 0 ? "👑 " : ar(i + 1) + ". ") + esc(sc.name) + "</div><div class=\"c\">" + ar(sc.score) + "</div></div>";
+  });
+  h += "</div>";
+  if (state.you.isHost) h += '<button class="btn mt" data-a="again">إلعبوا تاني</button>';
+  else h += '<p class="d mt">مستنيين المضيف…</p>';
+  return h + "</div>";
+}
+
 function taskLobbyScreen() {
   var isHost = state.you.isHost, cfg = state.cfg, n = state.players.length;
   var h = '<div class="fade">';
@@ -4479,7 +4934,8 @@ setInterval(function () {
 appEl.addEventListener("input", function (e) {
   var bind = e.target.getAttribute && e.target.getAttribute("data-bind");
   if (bind === "name") myName = e.target.value;
-  if (bind === "code") joinCode = e.target.value.toUpperCase();
+  if (bind === "code") { joinCode = String(e.target.value || "").replace(/[٠-٩]/g, function (d) { return "٠١٢٣٤٥٦٧٨٩".indexOf(d); }).replace(/[^0-9]/g, "").slice(0, 1); e.target.value = joinCode; }
+  if (bind === "guess") guessText = e.target.value;
 });
 
 appEl.addEventListener("click", async function (e) {
@@ -4600,6 +5056,10 @@ appEl.addEventListener("click", async function (e) {
     client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { openFloorSeconds: os }) });
     return;
   }
+  if (k === "cat") { client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { catId: parts[1] }) }); return; }
+  if (k === "gtarget") { var gt = Math.max(3, Math.min(15, (state.cfg.target || 5) + Number(parts[1]))); client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { target: gt }) }); return; }
+  if (k === "guessSubmit") { if (guessText.trim()) { client.send({ t: "guess", text: guessText.trim() }); guessText = ""; } return; }
+  if (k === "pass") { client.send({ t: "pass" }); return; }
   if (k === "taskDone") { client.send({ t: "taskDone" }); return; }
   if (k === "suspect") { client.send({ t: "suspect", target: parts[1] === "null" ? null : Number(parts[1]) }); return; }
   if (k === "endRound") { if (confirm("تقفل الجولة دلوقتي وتشوف النتيجة؟")) client.send({ t: "endRound" }); return; }
