@@ -284,6 +284,7 @@ const ROLE_DESC = {
 const DEFAULT_CFG = {
   thieves: 1, doctor: false, cop: false, traitor: false, nightKill: false, rami: false, doctorHealCount: 1,
   lastMessage: true, villagersToWin: 2, villagersToTie: 1,
+  voice: false, speakSeconds: 45, openFloorSeconds: 45, replySeconds: 20,
   talkSeconds: 120, voteSeconds: 60, talkRounds: 2,
 };
 
@@ -561,7 +562,7 @@ function startGame(s) {
   s.missionStatus = "wait";
   s.missionShown = false;
   s.log = { outs: [], healed: [], votes: [] };
-  s.day = 1; s.talkRound = 1; s.votes = {}; s.nominated = null; s.runoff = null; s._tied = null;
+  s.day = 1; s.talkRound = 1; s.votes = {}; s.nominated = null; s.runoff = null; s._tied = null; s.speak = null;
   s.night = null; s.events = []; s.eventIdx = 0; s.result = null;
   s.phase = "reveal";
   s.deadline = null;
@@ -582,6 +583,7 @@ function beginDay(s) {
   s.nominated = null;
   s.runoff = null; s._tied = null;
   s.deadline = null; // التايمر مقفول افتراضيًا — المضيف يشغّله يدويًا لو عايز
+  if (s.cfg.voice) beginSpeakRound(s, now()); else s.speak = null;
   return s;
 }
 
@@ -589,11 +591,177 @@ function nextTalkRound(s) {
   if (s.talkRound < s.cfg.talkRounds) {
     s.talkRound += 1;
     s.deadline = null; // برضو مقفول للراوند الجديد
+    if (s.cfg.voice) beginSpeakRound(s, now()); else s.speak = null;
   } else beginVote(s);
   return s;
 }
 
+/* ===================== نظام الدور في الكلام (الغرفة الصوتية) =====================
+ * القاعدة: واحد بس بيتكلم في المرة، والباقي سامعين. المضيف (اللي ماسك حالة
+ * اللعبة) هو اللي بيقرر مين دوره دلوقتي وإمتى ينتهي — المتصفح بينفّذ بس.
+ * الترتيب بيتخلط مرة واحدة أول كل جولة (مش عشوائي كل دور)، عشان كل واحد
+ * يتكلم مرة واحدة بالظبط، ومحدش يتكرر ومحدش يتنسى.
+ */
+
+/** بيرجّع اللي ينفع يتكلموا: اللي لسه في الدور بس */
+function speakEligible(s) {
+  return s.players.filter((p) => p.alive);
+}
+
+/** بيبدأ جولة كلام جديدة: يخلط الترتيب ويبدأ من الأول */
+function beginSpeakRound(s, nowMs) {
+  if (!s.cfg.voice) { s.speak = null; return s; }
+  const ids = shuffle(speakEligible(s).map((p) => p.id));
+  if (!ids.length) { s.speak = null; s.deadline = null; return s; }
+  s.speak = {
+    order: ids,
+    idx: 0,
+    mode: "turn",          // turn = دور فردي | reply = حق رد | open = الكلام مفتوح للكل
+    endsAt: nowMs + (s.cfg.speakSeconds || 45) * 1000,
+    paused: false,
+    remaining: null,       // الوقت الفاضل وقت الوقف
+    requests: [],          // اللي طالبين حق الرد
+    replyUsed: [],         // اللي استخدموا حق الرد في الجولة دي
+    speaker: ids[0],
+  };
+  s.deadline = s.speak.endsAt;
+  return s;
+}
+
+/** مين بيتكلم دلوقتي (أو null لو الكلام مفتوح/مفيش) */
+function speakCurrent(s) {
+  if (!s.speak || s.speak.mode === "open") return null;
+  return s.speak.speaker === undefined ? null : s.speak.speaker;
+}
+
+/** بيدوّر على اللاعب اللي بعده في الترتيب واللي لسه ينفع يتكلم */
+function nextEligibleIdx(s) {
+  const sp = s.speak;
+  for (let i = sp.idx + 1; i < sp.order.length; i++) {
+    const p = findPlayer(s, sp.order[i]);
+    if (p && p.alive && p.connected !== false) return i;
+  }
+  return -1;
+}
+
+/** بينقل للدور اللي بعده. بيرجّع "turn" أو "reply" أو "open" أو "end" */
+function speakAdvance(s, nowMs) {
+  const sp = s.speak;
+  if (!sp) return "end";
+
+  // الأولوية لحق الرد: اللي اتهموه ياخد فرصة قصيرة يرد بيها
+  const pending = (sp.requests || []).filter((id) => {
+    const p = findPlayer(s, id);
+    return p && p.alive && p.connected !== false && sp.replyUsed.indexOf(id) === -1;
+  });
+  if (pending.length) {
+    const who = pending[0];
+    sp.requests = sp.requests.filter((x) => x !== who);
+    sp.replyUsed.push(who);
+    sp.mode = "reply";
+    sp.speaker = who;
+    sp.paused = false; sp.remaining = null;
+    sp.endsAt = nowMs + (s.cfg.replySeconds || 20) * 1000;
+    s.deadline = sp.endsAt;
+    return "reply";
+  }
+
+  // لو اللي خلص كان بيرد، نرجّع الدور لصاحب الدور الأصلي المتبقّي
+  const nx = nextEligibleIdx(s);
+  if (sp.mode === "reply") {
+    const cur = findPlayer(s, sp.order[sp.idx]);
+    if (cur && cur.alive && cur.connected !== false && !sp.turnDone) {
+      sp.mode = "turn";
+      sp.speaker = sp.order[sp.idx];
+      sp.paused = false; sp.remaining = null;
+      sp.endsAt = nowMs + Math.min(15, s.cfg.speakSeconds || 45) * 1000;
+      s.deadline = sp.endsAt;
+      return "turn";
+    }
+  }
+
+  if (nx !== -1) {
+    sp.idx = nx;
+    sp.mode = "turn";
+    sp.speaker = sp.order[nx];
+    sp.turnDone = false;
+    sp.paused = false; sp.remaining = null;
+    sp.endsAt = nowMs + (s.cfg.speakSeconds || 45) * 1000;
+    s.deadline = sp.endsAt;
+    return "turn";
+  }
+
+  // خلص الترتيب — نفتح الكلام للكل شوية لو مفعّل
+  const openSec = Number(s.cfg.openFloorSeconds) || 0;
+  if (openSec > 0 && sp.mode !== "open") {
+    sp.mode = "open";
+    sp.speaker = null;
+    sp.paused = false; sp.remaining = null;
+    sp.endsAt = nowMs + openSec * 1000;
+    s.deadline = sp.endsAt;
+    return "open";
+  }
+  s.speak = null;
+  s.deadline = null;
+  return "end";
+}
+
+/** اللاعب بينهي دوره بنفسه (أو المضيف بيتخطاه) */
+function speakFinishTurn(s, nowMs) {
+  if (!s.speak) return "end";
+  s.speak.turnDone = true;
+  return speakAdvance(s, nowMs);
+}
+
+/** وقف/تشغيل مؤقت للدور — بيحفظ الوقت الفاضل */
+function speakPause(s, paused, nowMs) {
+  const sp = s.speak;
+  if (!sp) return s;
+  if (paused && !sp.paused) {
+    sp.paused = true;
+    sp.remaining = Math.max(0, sp.endsAt - nowMs);
+    s.deadline = null;
+  } else if (!paused && sp.paused) {
+    sp.paused = false;
+    sp.endsAt = nowMs + (sp.remaining || 0);
+    sp.remaining = null;
+    s.deadline = sp.endsAt;
+  }
+  return s;
+}
+
+/** المضيف بيزوّد وقت للدور الحالي */
+function speakAddTime(s, sec, nowMs) {
+  const sp = s.speak;
+  if (!sp) return s;
+  if (sp.paused) sp.remaining = Math.max(0, (sp.remaining || 0) + sec * 1000);
+  else { sp.endsAt = Math.max(nowMs, sp.endsAt + sec * 1000); s.deadline = sp.endsAt; }
+  return s;
+}
+
+/** لاعب بيطلب حق الرد (لو اتقال عليه حاجة) */
+function speakRaiseHand(s, id) {
+  const sp = s.speak;
+  if (!sp) return s;
+  const p = findPlayer(s, id);
+  if (!p || !p.alive) return s;
+  if (sp.speaker === id) return s;                       // هو بيتكلم أصلًا
+  if (sp.replyUsed.indexOf(id) !== -1) return s;         // خد فرصته خلاص
+  if (sp.requests.indexOf(id) === -1) sp.requests.push(id);
+  return s;
+}
+
+/** لو اللي بيتكلم قطع أو طلع برّا، منستناهوش */
+function speakCheckSpeaker(s, nowMs) {
+  const sp = s.speak;
+  if (!sp || sp.mode === "open" || sp.speaker === null || sp.speaker === undefined) return null;
+  const p = findPlayer(s, sp.speaker);
+  if (!p || !p.alive || p.connected === false) return speakAdvance(s, nowMs);
+  return null;
+}
+
 function beginVote(s) {
+  s.speak = null;
   s.phase = "vote";
   s.voteOutcome = null;
   s.votes = {};
@@ -681,7 +849,7 @@ const doctorHeals = (cfg) => Math.max(1, Math.min(3, Number(cfg.doctorHealCount)
 const doctorConfirmMode = (cfg) => !cfg.nightKill && !cfg.cop;
 
 function beginNight(s) {
-  s.runoff = null; s._tied = null;
+  s.runoff = null; s._tied = null; s.speak = null;
   const order = nightOrder(s);
   if (!order.length) return resolveMorning(s);
   s.phase = "night";
@@ -923,6 +1091,29 @@ function viewFor(s, playerId) {
       myVoters: s.phase === "vote" ? myVoters : null,
     } : null,
     nightStep: step,
+    speak: s.speak ? {
+      mode: s.speak.mode,
+      speakerId: s.speak.speaker === undefined ? null : s.speak.speaker,
+      speakerName: (findPlayer(s, s.speak.speaker) || {}).name || null,
+      nextName: (function () {
+        if (s.speak.mode === "open") return null;
+        for (let i = s.speak.idx + 1; i < s.speak.order.length; i++) {
+          const p = findPlayer(s, s.speak.order[i]);
+          if (p && p.alive && p.connected !== false) return p.name;
+        }
+        return null;
+      })(),
+      endsAt: s.speak.paused ? null : s.speak.endsAt,
+      remaining: s.speak.paused ? s.speak.remaining : null,
+      paused: !!s.speak.paused,
+      position: s.speak.idx + 1,
+      total: s.speak.order.length,
+      iSpeak: !!(me && s.speak.speaker === me.id && s.speak.mode !== "open"),
+      handUp: !!(me && (s.speak.requests || []).indexOf(me.id) !== -1),
+      canRaise: !!(me && me.alive && s.speak.speaker !== me.id &&
+        (s.speak.replyUsed || []).indexOf(me.id) === -1 && s.speak.mode !== "open"),
+      waiting: (s.speak.requests || []).length,
+    } : null,
     nightProgress: (s.phase === "night" && s.night) ? (function () {
       const total = s.night.order.length;
       const idx = s.night.idx;
@@ -1026,6 +1217,8 @@ var EngineExports = {
   suggestCfg, validateCfg, makeCode, createRoom,
   addPlayer, removePlayer, startGame, markSeen, autoCfg,
   beginDay, nextTalkRound, beginVote, castVote, voteCounts, closeVote, runoffVoters,
+  beginSpeakRound, speakCurrent, speakAdvance, speakFinishTurn, speakPause, speakAddTime,
+  speakRaiseHand, speakCheckSpeaker, speakEligible,
   beginNight, nightAction, resolveMorning, nextEvent, afterMorning, proceed,
   winner, tieState, viewFor, findPlayer, alivePlayers, doctorHeals, doctorConfirmMode,
   evalMission, pickMission, shuffle,
@@ -1034,6 +1227,296 @@ var EngineExports = {
 if (typeof module !== 'undefined' && module.exports) module.exports = EngineExports;
 else global.Engine = EngineExports;
 })(typeof window !== 'undefined' ? window : global);
+
+</script>
+<script>
+
+/* ============================================================================
+ * لعبة "المهمة السرية" — محرّك مستقل تمامًا عن حرامية وأهل القرية
+ * تصميم وتطوير: فرحات زايد · © 2026
+ *
+ * الفكرة: أصحاب قاعدين بيتكلموا عادي. كل واحد معاه مهمة سرية على موبايله
+ * (يخلّي حد يعمل حاجة، أو يعمل هو حاجة بهدوء). ينفّذها من غير ما حد ياخد
+ * باله. ولو شكّيت في حد سجّلت شكّك في السر. آخر الجولة النتايج بتتكشف.
+ * ========================================================================== */
+(function (root) {
+  "use strict";
+
+  var now = () => Date.now();
+
+  /* ---- مكتبة التحديات المصري (جاهزة) ---- */
+  // نوع "self" = إنت تعملها بهدوء | نوع "bait" = تخلّي حد تاني يعملها
+  var TASKS = [
+    { type: "bait", text: "خلّي حد يقولّك \"ماشي\"" },
+    { type: "bait", text: "خلّي حد يسألك إنت كويس؟ أو مالك؟" },
+    { type: "bait", text: "خلّي حد يطلّع موبايله قدامك" },
+    { type: "bait", text: "خلّي حد يضحك بصوت عالي" },
+    { type: "bait", text: "خلّي حد يقول اسم أكلة" },
+    { type: "bait", text: "خلّي حد يحلف بأي حاجة" },
+    { type: "bait", text: "خلّي حد يقولّك \"بجد؟\"" },
+    { type: "bait", text: "خلّي حد يسألك سؤال بيبدأ بـ\"ليه\"" },
+    { type: "bait", text: "خلّي حد يذكر اسم بلد" },
+    { type: "bait", text: "خلّي حد يقوم من مكانه" },
+    { type: "bait", text: "خلّي حد يشرب حاجة قدامك" },
+    { type: "bait", text: "خلّي حد يقول \"والله\"" },
+    { type: "bait", text: "خلّي حد يمدح حاجة إنت لابسها أو ماسكها" },
+    { type: "bait", text: "خلّي حد يذكر رقم أكبر من ١٠٠" },
+    { type: "bait", text: "خلّي حد يقولّك \"إنت بتهرّج\"" },
+    { type: "bait", text: "خلّي حد يعيد جملة قلتها إنت" },
+    { type: "bait", text: "خلّي حد يسألك عن مين واحد مش موجود معانا" },
+    { type: "bait", text: "خلّي حد يقول \"مش فاهم\"" },
+    { type: "self", text: "قول كلمة إنجليزي ٣ مرات في كلامك من غير ما حد يلاحظ" },
+    { type: "self", text: "وصّل الكلام لموضوع الأكل" },
+    { type: "self", text: "وصّل الكلام لموضوع الكورة" },
+    { type: "self", text: "غيّر مكان قعدتك من غير ما حد يعلّق" },
+    { type: "self", text: "قول جملة فيها اسم حيوان" },
+    { type: "self", text: "امدح حد فيهم بشكل طبيعي" },
+    { type: "self", text: "اذكر ذكرى قديمة من أيام زمان" },
+    { type: "self", text: "قول \"أنا كنت عارف\" في أي سياق" },
+    { type: "self", text: "اسأل سؤال مالوش أي لازمة بجدية" },
+    { type: "self", text: "كرّر كلمة واحدة ٤ مرات في كلامك" },
+    { type: "self", text: "قول جملة بالفصحى وسط الكلام" },
+    { type: "self", text: "اتكلم عن الجو أو الحر أو البرد" },
+    { type: "self", text: "قول \"خلّينا نطلب حاجة\" أو \"أنا جعان\"" },
+    { type: "self", text: "همس لحد جنبك أي كلمة" },
+    { type: "self", text: "قول رقم تليفون أو تاريخ من دماغك" },
+    { type: "self", text: "اذكر اسم مسلسل أو فيلم" },
+    { type: "self", text: "قول نكتة أو حاجة تضحك" },
+    { type: "self", text: "اعمل نفسك بتدوّر على حاجة ضاعت" },
+  ];
+
+  function shuffle(a) {
+    a = a.slice();
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  var DEFAULT_CFG = {
+    rounds: 3,          // عدد الجولات (أو 1 لجولة واحدة)
+    minutes: 10,        // مدة الجولة بالدقايق (١ لـ١٥)
+    doubleTask: false,  // مهمة مزدوجة أحيانًا
+    counterTask: false, // مهمة مضادة أحيانًا (امنع نفسك تتفضح)
+    openFinal: false,   // آخر جولة المهام مكشوفة للكل
+  };
+
+  function findPlayer(s, id) {
+    for (var i = 0; i < s.players.length; i++) if (s.players[i].id === id) return s.players[i];
+    return null;
+  }
+
+  function createRoom(code, hostId) {
+    return {
+      game: "task",
+      code: code,
+      hostId: hostId,
+      phase: "lobby",       // lobby | play | reveal | over
+      cfg: Object.assign({}, DEFAULT_CFG),
+      cfgTouched: false,
+      players: [],          // {id,name,token,connected,score}
+      round: 0,
+      deadline: null,
+      assign: {},           // id -> { tasks:[{text,type,kind}], done:bool }
+      suspicions: {},       // id(شاكك) -> id(متشوك فيه)
+      lastReveal: null,     // نتيجة آخر جولة
+      version: 2,
+    };
+  }
+
+  function addPlayer(s, p) {
+    if (s.phase !== "lobby") throw new Error("اللعبة بدأت — استنى الجولة الجاية.");
+    if (s.players.length >= 15) throw new Error("الشلة كاملة (١٥).");
+    var name = String(p.name || "").trim().slice(0, 14) || ("لاعب " + (s.players.length + 1));
+    if (s.players.some((x) => x.name === name)) throw new Error("في حد بنفس الاسم — غيّره شوية.");
+    s.players.push({ id: p.id, name: name, token: p.token, connected: true, score: 0 });
+    return s;
+  }
+  function removePlayer(s, id) {
+    s.players = s.players.filter((p) => p.id !== id);
+    return s;
+  }
+  function setConnected(s, id, on) {
+    var p = findPlayer(s, id); if (p) p.connected = on;
+    return s;
+  }
+
+  function validateCfg(c) {
+    var out = Object.assign({}, DEFAULT_CFG, c || {});
+    out.rounds = Math.max(1, Math.min(10, Number(out.rounds) || 1));
+    out.minutes = Math.max(1, Math.min(15, Number(out.minutes) || 10));
+    out.doubleTask = !!out.doubleTask;
+    out.counterTask = !!out.counterTask;
+    out.openFinal = !!out.openFinal;
+    return out;
+  }
+
+  /** بيوزّع مهمة (أو اتنين) على كل لاعب */
+  function assignTasks(s) {
+    var pool = shuffle(TASKS);
+    var pi = 0;
+    var pick = function () { var t = pool[pi % pool.length]; pi++; return t; };
+    s.assign = {};
+    s.players.forEach(function (p) {
+      var tasks = [];
+      var main = pick();
+      tasks.push({ text: main.text, type: main.type, kind: "main" });
+      // مهمة مزدوجة أحيانًا
+      if (s.cfg.doubleTask && Math.random() < 0.3) {
+        var extra = pick();
+        tasks.push({ text: extra.text, type: extra.type, kind: "double" });
+      }
+      // مهمة مضادة أحيانًا: امنع نفسك من حاجة
+      if (s.cfg.counterTask && Math.random() < 0.25) {
+        tasks.push({ text: "ماتضحكش خالص طول الجولة", type: "self", kind: "counter" });
+      }
+      s.assign[p.id] = { tasks: tasks, done: false };
+    });
+    return s;
+  }
+
+  function beginRound(s) {
+    s.round = (s.round || 0) + 1;
+    s.phase = "play";
+    s.suspicions = {};
+    s.lastReveal = null;
+    assignTasks(s);
+    s.deadline = now() + s.cfg.minutes * 60 * 1000;
+    return s;
+  }
+
+  /** اللاعب بيعلّم إنه نفّذ مهمته */
+  function markDone(s, id) {
+    if (s.phase !== "play") return s;
+    var a = s.assign[id];
+    if (a) a.done = true;
+    return s;
+  }
+
+  /** اللاعب بيسجّل شكّه في حد (سري). null = يشيل شكّه */
+  function setSuspicion(s, id, targetId) {
+    if (s.phase !== "play") return s;
+    if (targetId === null || targetId === undefined) { delete s.suspicions[id]; return s; }
+    if (targetId === id) return s; // مبتشكش في نفسك
+    if (!findPlayer(s, targetId)) return s;
+    s.suspicions[id] = targetId;
+    return s;
+  }
+
+  var isFinalRound = (s) => s.round >= s.cfg.rounds;
+
+  /** بينهي الجولة ويحسب النقط:
+   *  +1 نفّذت من غير ما تتكشف · +1 كشفت حد نفّذ · -1 شكّيت غلط (اتسرّعت) */
+  function endRound(s) {
+    var caught = {};       // id -> اتكشف؟ (حد شكّ فيه وهو فعلاً نفّذ)
+    var detail = [];       // تفاصيل كل لاعب للعرض
+    // مين شكّ في مين
+    var suspOf = {};       // targetId -> [شاكّين]
+    Object.keys(s.suspicions).forEach(function (sid) {
+      var tid = s.suspicions[sid];
+      (suspOf[tid] = suspOf[tid] || []).push(Number(sid));
+    });
+
+    s.players.forEach(function (p) {
+      var a = s.assign[p.id] || { tasks: [], done: false };
+      var did = !!a.done;
+      var accusers = suspOf[p.id] || [];
+      var wasCaught = did && accusers.length > 0; // نفّذ وفي حد شكّ فيه
+      caught[p.id] = wasCaught;
+
+      var delta = 0;
+      // نفّذ ومحدش كشفه
+      if (did && !wasCaught) delta += 1;
+      detail.push({
+        id: p.id, name: p.name,
+        did: did, caught: wasCaught,
+        accusers: accusers.map(function (x) { return (findPlayer(s, x) || {}).name; }),
+        tasks: a.tasks.map(function (t) { return t.text; }),
+      });
+      p.score += delta;
+    });
+
+    // مكافأة/عقوبة الشك
+    Object.keys(s.suspicions).forEach(function (sid) {
+      var accuser = findPlayer(s, Number(sid));
+      var tid = s.suspicions[sid];
+      if (!accuser) return;
+      if (caught[tid]) accuser.score += 1;      // كشف صح
+      else accuser.score -= 1;                  // اتسرّع
+    });
+
+    s.lastReveal = {
+      round: s.round,
+      final: isFinalRound(s),
+      detail: detail,
+      scores: s.players.map(function (p) { return { name: p.name, score: p.score }; })
+        .sort(function (a, b) { return b.score - a.score; }),
+    };
+    s.phase = "reveal";
+    s.deadline = null;
+    return s;
+  }
+
+  function nextAfterReveal(s) {
+    if (s.lastReveal && s.lastReveal.final) { s.phase = "over"; s.deadline = null; }
+    else beginRound(s);
+    return s;
+  }
+
+  function backToLobby(s) {
+    s.phase = "lobby";
+    s.round = 0;
+    s.assign = {}; s.suspicions = {}; s.lastReveal = null; s.deadline = null;
+    s.players.forEach(function (p) { p.score = 0; });
+    return s;
+  }
+
+  /** اللقطة اللي بيشوفها لاعب معيّن — مفيهاش أسرار غيره */
+  function viewFor(s, id) {
+    var me = findPlayer(s, id);
+    var open = s.phase === "play" && isFinalRound(s) && s.cfg.openFinal;
+    return {
+      game: "task",
+      phase: s.phase,
+      code: s.code,
+      round: s.round,
+      rounds: s.cfg.rounds,
+      minutes: s.cfg.minutes,
+      cfg: s.cfg,
+      deadline: s.deadline,
+      openFinal: open,
+      hostId: s.hostId,
+      you: me ? {
+        id: me.id, name: me.name, isHost: me.id === s.hostId,
+        score: me.score,
+        tasks: (s.phase === "play" && s.assign[me.id]) ? s.assign[me.id].tasks : null,
+        done: (s.phase === "play" && s.assign[me.id]) ? s.assign[me.id].done : false,
+        suspect: s.phase === "play" ? (s.suspicions[me.id] ?? null) : null,
+      } : null,
+      players: s.players.map(function (p) {
+        return {
+          id: p.id, name: p.name, connected: p.connected,
+          isHost: p.id === s.hostId, score: p.score,
+          // في الجولة المكشوفة بس، الكل يشوف مهام بعض
+          tasks: open && s.assign[p.id] ? s.assign[p.id].tasks.map(function (t) { return t.text; }) : null,
+        };
+      }),
+      reveal: (s.phase === "reveal" || s.phase === "over") ? s.lastReveal : null,
+      standings: s.players.map(function (p) { return { name: p.name, score: p.score, isHost: p.id === s.hostId }; })
+        .sort(function (a, b) { return b.score - a.score; }),
+    };
+  }
+
+  var Exports = {
+    TASKS, DEFAULT_CFG, createRoom, addPlayer, removePlayer, setConnected,
+    validateCfg, assignTasks, beginRound, markDone, setSuspicion, endRound,
+    nextAfterReveal, backToLobby, viewFor, findPlayer, isFinalRound, shuffle,
+    setClock: (fn) => { now = fn; },
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = Exports;
+  else root.TaskGame = Exports;
+})(typeof window !== "undefined" ? window : globalThis);
 
 </script>
 <script>
@@ -1050,11 +1533,16 @@ else global.Engine = EngineExports;
   "use strict";
   var E = (typeof module !== "undefined" && module.exports) ? require("./engine.js") : global.Engine;
 
-  function HostBrain(backend, code, hostUid, hostName, chatEnabled) {
+  function HostBrain(backend, code, hostUid, hostName, chatEnabled, game) {
     this.backend = backend;
     this.code = code;
-    this.state = E.createRoom(code, null);
-    this.state.chatEnabled = chatEnabled !== false; // افتراضيًا مفعّل لو محددش
+    this.game = game || "mafia";
+    if (this.game === "task") {
+      this.state = TaskGame.createRoom(code, null);
+    } else {
+      this.state = E.createRoom(code, null);
+      this.state.chatEnabled = chatEnabled !== false; // افتراضيًا مفعّل لو محددش
+    }
     this.uidToId = {};      // uid فايربيز -> رقم داخلي (زي ما كان بيحصل في السيرفر)
     this.idToUid = {};
     this.nextId = 0;
@@ -1064,31 +1552,37 @@ else global.Engine = EngineExports;
     this.state.hostId = this.uidToId[hostUid];
   }
 
+  HostBrain.prototype.eng = function () { return this.game === "task" ? TaskGame : E; };
+
   HostBrain.prototype.addPlayer = function (uid, name) {
     if (uid in this.uidToId) return this.uidToId[uid];
     var id = this.nextId++;
     this.uidToId[uid] = id;
     this.idToUid[id] = uid;
-    E.addPlayer(this.state, { id: id, token: uid, name: name });
+    this.eng().addPlayer(this.state, { id: id, token: uid, name: name });
     return id;
   };
 
   HostBrain.prototype.broadcast = function () {
     var self = this;
+    var Eng = this.eng();
     var onErr = function (e) { if (self.onError) self.onError(e); };
     this.backend.set("rooms/" + this.code + "/meta", {
       phase: this.state.phase,
+      game: this.game,
       count: this.state.players.length,
       hostOnline: true,
       hostHeartbeat: this.backend.now(),
     }).catch(onErr);
     // نسخة كاملة (فيها الأسرار) بترجع للمضيف بس لو قفل التطبيق وفتحه تاني
     this.backend.set("rooms/" + this.code + "/hostBackup", {
-      raw: JSON.stringify({ state: this.state, uidToId: this.uidToId, idToUid: this.idToUid, nextId: this.nextId }),
+      raw: JSON.stringify({ game: this.game, state: this.state, uidToId: this.uidToId, idToUid: this.idToUid, nextId: this.nextId }),
     }).catch(onErr);
     this.state.players.forEach(function (p) {
       var uid = self.idToUid[p.id];
-      var view = E.viewFor(self.state, p.id);
+      var view = Eng.viewFor(self.state, p.id);
+      // بنرفق uid كل لاعب عشان الأجهزة تعرف توصّل ببعض في الغرفة الصوتية
+      if (view && view.players) view.players.forEach(function (q) { q.uid = self.idToUid[q.id] || null; });
       self.backend.set("rooms/" + self.code + "/views/" + uid, view).catch(onErr);
     });
   };
@@ -1101,7 +1595,15 @@ else global.Engine = EngineExports;
     this.timer = this.backend.setTimer(function () {
       self.timer = null;
       try {
-        if (self.state.phase === "day") { self.state.deadline = null; } // بيوقف بس، من غير ما يخطّي الطور
+        if (self.game === "task") {
+          if (self.state.phase === "play") TaskGame.endRound(self.state);
+          else return;
+        }
+        else if (self.state.phase === "day") {
+          // لو الغرفة الصوتية شغّالة، خلاص وقت اللي بيتكلم — ننقل للي بعده
+          if (self.state.speak) E.speakAdvance(self.state, self.backend.now());
+          else self.state.deadline = null; // بيوقف بس، من غير ما يخطّي الطور
+        }
         else if (self.state.phase === "vote") self.finishVote();
         else return;
       } catch (e) { return; }
@@ -1125,6 +1627,7 @@ else global.Engine = EngineExports;
   var STEP_ACTIONS = {
     start: 1, forceVote: 1, tallyNext: 1, revote: 1, runoff: 1, morningNext: 1,
     next: 1, night: 1, vote: 1, again: 1, restart: 1, startTimer: 1, kick: 1,
+    start: 1, endRound: 1, nextRound: 1,
   };
 
   HostBrain.prototype.snapshot = function () {
@@ -1159,6 +1662,46 @@ else global.Engine = EngineExports;
       var isHost = s.hostId === id;
 
       if (STEP_ACTIONS[msg.t]) this.snapshot();
+
+      // ===== لعبة المهمة السرية: مسار منفصل تمامًا =====
+      if (this.game === "task") {
+        var T = TaskGame;
+        switch (msg.t) {
+          case "cfg": {
+            if (!isHost || s.phase !== "lobby") return;
+            s.cfg = T.validateCfg(Object.assign({}, s.cfg, msg.cfg || {}));
+            s.cfgTouched = true;
+            break;
+          }
+          case "kick": {
+            if (!isHost || s.phase !== "lobby") return;
+            var kid = Number(msg.id);
+            if (kid === s.hostId) return;
+            T.removePlayer(s, kid);
+            break;
+          }
+          case "start": {
+            if (!isHost || s.phase !== "lobby") return;
+            if (s.players.length < 3) return;
+            T.beginRound(s);
+            break;
+          }
+          case "taskDone": { T.markDone(s, id); break; }
+          case "suspect": { T.setSuspicion(s, id, msg.target === null || msg.target === undefined ? null : Number(msg.target)); break; }
+          case "endRound": { if (!isHost || s.phase !== "play") return; T.endRound(s); break; }
+          case "nextRound": { if (!isHost || s.phase !== "reveal") return; T.nextAfterReveal(s); break; }
+          case "again": { if (!isHost) return; T.backToLobby(s); break; }
+          case "leave": {
+            T.removePlayer(s, id);
+            if (id === s.hostId && s.players.length) s.hostId = s.players[0].id;
+            break;
+          }
+          case "undo": { if (isHost && this.undo()) { this.armTimer(); this.afterChange(); } return; }
+          default: return;
+        }
+        this.afterChange();
+        return;
+      }
 
       if (msg.t === "undo") {
         if (!isHost) return;
@@ -1202,6 +1745,34 @@ else global.Engine = EngineExports;
         }
         case "forceVote": { if (!isHost || s.phase !== "vote") return; this.finishVote(); break; }
         case "tallyNext": { if (!isHost || s.phase !== "tally") return; E.beginNight(s); break; }
+        case "speakDone": {
+          // اللي بيتكلم بينهي دوره بنفسه، أو المضيف بيتخطاه
+          var sp0 = s.speak;
+          if (!sp0 || s.phase !== "day") return;
+          if (!isHost && sp0.speaker !== id) return;
+          E.speakFinishTurn(s, this.backend.now());
+          break;
+        }
+        case "speakPause": {
+          if (!isHost || !s.speak) return;
+          E.speakPause(s, !s.speak.paused, this.backend.now());
+          break;
+        }
+        case "speakAdd": {
+          if (!isHost || !s.speak) return;
+          E.speakAddTime(s, Math.max(-60, Math.min(60, Number(msg.sec) || 15)), this.backend.now());
+          break;
+        }
+        case "speakHand": {
+          if (!s.speak || s.phase !== "day") return;
+          E.speakRaiseHand(s, id);
+          break;
+        }
+        case "speakRestart": {
+          if (!isHost || s.phase !== "day") return;
+          E.beginSpeakRound(s, this.backend.now());
+          break;
+        }
         case "revote": {
           if (!isHost || s.phase !== "tally") return;
           s.votes = {}; delete s._counts; delete s._rawVotes; s.runoff = null; s._tied = null;
@@ -1313,6 +1884,7 @@ else global.Engine = EngineExports;
 
   HostBrain.prototype.restore = function (raw) {
     var d = JSON.parse(raw);
+    this.game = d.game || (d.state && d.state.game) || "mafia";
     this.state = d.state; this.uidToId = d.uidToId; this.idToUid = d.idToUid; this.nextId = d.nextId;
   };
 
@@ -1360,11 +1932,11 @@ else global.Engine = EngineExports;
     this._unsubs = [];
   };
 
-  GameClient.prototype.createRoom = function (chatEnabled) {
+  GameClient.prototype.createRoom = function (chatEnabled, game) {
     this._cleanup();
     var code = makeCode();
     this.code = code; this.isHost = true;
-    this.hostBrain = new HostBrain(this.backend, code, this.uid, this.name, chatEnabled);
+    this.hostBrain = new HostBrain(this.backend, code, this.uid, this.name, chatEnabled, game);
     this._listen();
     this.hostBrain.broadcast();
     return code;
@@ -1663,6 +2235,8 @@ var SFX = {
   tally:    function () { tone(330, 330, 0.1, "square", 0, 0.14); tone(440, 440, 0.14, "square", 0.1, 0.14); },
   // محدش طلع
   nobody:   function () { tone(300, 300, 0.12, "triangle", 0, 0.13); tone(300, 240, 0.28, "triangle", 0.13, 0.13); },
+  // تنبيه قرب انتهاء وقت الكلام
+  tick:     function () { tone(880, 880, 0.09, "square", 0, 0.13); tone(660, 660, 0.12, "square", 0.12, 0.12); },
   // الخاين اتكشف
   traitor:  function () { tone(220, 440, 0.3, "sawtooth", 0, 0.16); tone(415, 415, 0.3, "sawtooth", 0.26, 0.14); },
 };
@@ -1708,6 +2282,18 @@ function updateSfx() {
     return;
   }
   if (p === "night") { lastSfxKey = null; }
+  if (p === "day" && state.speak) {
+    var sp = state.speak;
+    // نغمة أول ما ييجي دورك
+    if (sp.iSpeak) sfxOnce("myturn-" + state.day + "-" + state.talkRound + "-" + sp.position + "-" + sp.mode, "saved");
+    // تنبيه قبل ما الوقت يخلص بـ٥ ثواني — عشان القطع المفاجئ وحش
+    if (!sp.paused && sp.endsAt) {
+      var leftMs = sp.endsAt - Date.now();
+      if (leftMs > 0 && leftMs <= 5200) {
+        sfxOnce("warn-" + sp.endsAt, "tick");
+      }
+    }
+  }
 }
 
 /* ---------------------------- الحالة العامة ---------------------------- */
@@ -1919,11 +2505,11 @@ document.addEventListener("visibilitychange", function () {
   if (document.visibilityState === "visible" && client) keepAwake();
 });
 
-function doCreate() {
+function doCreate(game) {
   if (!myName.trim()) return;
-  localStorage.setItem("haramia-name", myName.trim());
+  try { localStorage.setItem("haramia-name", myName.trim()); } catch (e) {}
   makeClient(myName.trim());
-  client.createRoom(true);
+  client.createRoom(true, game || "mafia");
   if (client.hostBrain) client.hostBrain.onError = function (e) { showToast("مشكلة في اللعبة: " + ((e && e.message) || e)); };
   watchHostHeartbeat(client.code);
   saveSession();
@@ -2033,6 +2619,16 @@ function view() {
   }
 
   var body = "";
+  if (state.game === "task") {
+    switch (state.phase) {
+      case "lobby": body = taskLobbyScreen(); break;
+      case "play": body = taskPlayScreen(); break;
+      case "reveal": body = taskRevealScreen(); break;
+      case "over": body = taskOverScreen(); break;
+      default: body = '<div class="mid ctr"><div class="spin"></div></div>';
+    }
+    return netBar() + body + footer() + uiSheetHTML();
+  }
   switch (state.phase) {
     case "lobby": body = lobbyScreen(); break;
     case "reveal": body = revealScreen(); break;
@@ -2049,28 +2645,56 @@ function view() {
   return netBar() + banner + body + footer() + uiSheetHTML();
 }
 
+var pickedGame = null; // "mafia" | "task" | null (شاشة اختيار اللعبة)
+
 function homeScreen() {
-  var h = '<div class="mid" style="padding-top:10px">';
-  h += '<div class="ctr fade">' + ctrEmblem("thief", 70, "var(--saffron)") +
-    '<h1 class="logo" style="margin-top:8px">حرامية<br><span style="color:var(--saffron)">وأهل القرية</span></h1>' +
-    '<p class="d" style="max-width:290px;margin:12px auto 0">كل واحد يفتح اللينك على موبايله، وتلعبوا مع بعض حتى لو كل واحد في مكان مختلف.</p></div></div>';
-
-  if (savedSession) {
-    h += '<div class="resumeCard"><p class="eb" style="color:var(--violet)">لسه فاتح</p>' +
-      '<p class="d" style="margin-bottom:10px">كنت في أوضة بكود <b style="color:var(--parch)">' + esc(savedSession.code) + "</b>" +
-      (savedSession.wasHost ? " كمستضيف." : ".") + "</p>" +
-      '<button class="btn violet" data-a="resume">كمّل نفس اللعبة</button></div>';
+  // شاشة اختيار اللعبة — الشلة
+  if (!pickedGame) {
+    var h = '<div class="mid" style="padding-top:6px"><div class="ctr fade">' +
+      '<h1 class="logo" style="margin-top:4px">ال<span style="color:var(--saffron)">شلّة</span></h1>' +
+      '<p class="d" style="max-width:300px;margin:10px auto 0">ألعاب جماعية بالمصري — إنتوا وأصحابكم، كل واحد على موبايله. اختار لعبة وابدأوا.</p></div></div>';
+    if (savedSession) {
+      h += '<div class="resumeCard"><p class="eb" style="color:var(--violet)">لسه فاتح</p>' +
+        '<p class="d" style="margin-bottom:10px">كنت في أوضة بكود <b style="color:var(--parch)">' + esc(savedSession.code) + "</b>" +
+        (savedSession.wasHost ? " كمستضيف." : ".") + "</p>" +
+        '<button class="btn violet" data-a="resume">كمّل نفس اللعبة</button></div>';
+    }
+    h += '<div class="stack" style="gap:12px">';
+    h += gameCard("mafia", "حرامية وأهل القرية", "لعبة أدوار وخداع — لاقوا الحرامية قبل ما يكسبوا", "thief", "var(--madder)");
+    h += gameCard("task", "المهمة السرية", "كل واحد معاه مهمة سرية ينفّذها من غير ما حد ياخد باله", "villager", "var(--teal)");
+    h += "</div>";
+    h += '<div class="stack" style="margin-top:14px"><div style="display:flex;gap:8px">' +
+      '<input class="input" style="flex:1;text-align:center;letter-spacing:6px;font-family:var(--disp);font-size:22px" placeholder="عندك كود؟" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
+      '<button class="btn dark" style="flex:1" data-a="join">ادخل بالكود</button></div></div>';
+    if (connError) h += '<div class="errbox" style="margin-top:12px">' + esc(connError) + "</div>";
+    return h;
   }
-  if (connError) h += '<div class="errbox">' + esc(connError) + "</div>";
 
-  h += '<div class="stack">' +
+  // شاشة الاسم + إنشاء أوضة للّعبة المختارة
+  var isTask = pickedGame === "task";
+  var title = isTask ? "المهمة السرية" : "حرامية وأهل القرية";
+  var g = '<div class="mid" style="padding-top:10px"><div class="ctr fade">' +
+    ctrEmblem(isTask ? "villager" : "thief", 64, isTask ? "var(--teal)" : "var(--saffron)") +
+    '<h1 class="logo" style="margin-top:8px;font-size:30px">' + title + "</h1>" +
+    '<p class="d" style="max-width:290px;margin:10px auto 0">' +
+    (isTask ? "قاعدين بتتكلموا عادي، وكل واحد بينفّذ مهمته في السر. اللي يتكشف يخسر."
+      : "كل واحد ياخد دور سري. أهل القرية بيدوّروا على الحرامية بالتصويت.") + "</p></div></div>";
+  g += '<div class="stack">' +
     '<input class="input" placeholder="اسمك" maxlength="14" value="' + esc(myName) + '" data-bind="name">' +
-    '<button class="btn" data-a="create">اعمل أوضة جديدة</button>' +
-    '<div style="display:flex;gap:8px">' +
-    '<input class="input" style="flex:1;text-align:center;letter-spacing:6px;font-family:var(--disp);font-size:22px" placeholder="الكود" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
-    '<button class="btn dark" style="flex:1" data-a="join">ادخل</button></div></div>';
-  h += '<button class="btn ghost sm mt" data-a="about">الأدوار وقواعد اللعب</button>';
-  return h;
+    '<button class="btn" data-a="createGame">اعمل أوضة جديدة</button>' +
+    '<button class="btn ghost sm" data-a="backToGames">← ارجع لاختيار اللعبة</button></div>';
+  g += '<button class="btn ghost sm mt" data-a="about">' + (isTask ? "إزاي بنلعب" : "الأدوار وقواعد اللعب") + "</button>";
+  return g;
+}
+
+function gameCard(id, title, desc, emblem, color) {
+  return '<button data-a="pickGame:' + id + '" style="width:100%;text-align:right;border:1px solid ' + color +
+    '55;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01));border-radius:18px;' +
+    'padding:16px;cursor:pointer;display:flex;align-items:center;gap:14px">' +
+    '<span style="flex:none;color:' + color + '">' + ctrEmblem(emblem, 46, color) + "</span>" +
+    '<span style="flex:1;min-width:0"><span style="display:block;font-family:var(--disp);font-size:19px;color:var(--parch)">' + title + "</span>" +
+    '<span style="display:block;font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.5">' + desc + "</span></span>" +
+    '<span style="flex:none;color:' + color + ';font-size:20px">›</span></button>';
 }
 
 var DISCORD_VOICE_LINK = "https://discord.gg/qhSuRbfzZ";
@@ -2091,8 +2715,7 @@ function lobbyScreen() {
     'style="text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px">' +
     '<span style="font-size:18px">🎙️</span> ادخل الشات الصوتي</a>';
 
-  h += '<div class="card mt"><p class="eb">اللاعبين (' + ar(n) + ")</p><div class=\"plist\">";
-  state.players.forEach(function (p) {
+  h += '<div class="card mt"><p class="eb">اللاعبين (' + ar(n) + ")</p><div class=\"plist\">";  state.players.forEach(function (p) {
     h += '<div class="prow"><div class="dotc' + (p.connected === false ? " off" : "") + '"></div>' +
       '<div class="nm">' + esc(p.name) + (p.isHost ? " ★" : "") + "</div>" +
       '<div class="tg">' + (p.connected === false ? "مقطوع" : "جاهز") + "</div>" +
@@ -2104,6 +2727,25 @@ function lobbyScreen() {
       "</div>";
   });
   h += "</div></div>";
+
+  // إذن المايك بنطلبه بدري — عشان اللاعب ميضيّعش وقت دوره في نافذة الإذن
+  if (cfg.voice) {
+    var ms = Voice.micState;
+    var ok = ms === "ready";
+    h += '<div class="card mt" style="border-color:' + (ok ? "rgba(45,157,145,.5)" : "rgba(233,163,60,.5)") + '">' +
+      '<div style="display:flex;align-items:center;gap:11px">' +
+      '<span style="font-size:22px">' + (ok ? "✅" : "🎙️") + "</span>" +
+      '<div style="flex:1;min-width:0"><div style="font-weight:800;font-size:14px;color:var(--parch)">' +
+      (ok ? "المايك جاهز" : ms === "denied" ? "المايك مرفوض" : ms === "unsupported" ? "المتصفح مش بيدعم الصوت" : "فعّل المايك قبل ما تبدأ") + "</div>" +
+      '<div style="font-size:12px;color:var(--muted);margin-top:2px">' +
+      (ok ? "هيتفتح لوحده لما ييجي دورك، ويتقفل بعده."
+        : ms === "denied" ? "افتح إعدادات المتصفح واسمح بالمايك للموقع ده، وبعدين جرّب تاني."
+        : ms === "unsupported" ? "جرّب كروم أو سفاري محدّث."
+        : "دوس عشان تسمح بالمايك مرة واحدة بس.") + "</div></div></div>" +
+      (ok || ms === "unsupported" ? "" : '<button class="btn dark sm mt" style="font-size:13px;padding:10px" data-a="askMic">' +
+        (ms === "asking" ? "بنطلب الإذن…" : "فعّل المايك") + "</button>") +
+      "</div>";
+  }
 
   if (isHost) {
     h += '<div class="card mt"><div class="row" style="border-bottom:0"><div class="swl">' +
@@ -2118,6 +2760,24 @@ function lobbyScreen() {
       '<span style="display:flex;font-size:22px">⚠️</span><div><div class="swt">تنبيه التعادل بعد خروج كام أهل قرية</div><div class="sws">من ١ لـ٥ — لما يوصلوا للعدد ده، إشعار بيوصل للكل</div></div></div>' +
       '<div class="step"><button data-a="vt:-1">−</button><div class="v">' + ar(vtVal) + '</div><button data-a="vt:1">+</button></div>' +
       "</div></div>";
+    h += '<div class="card mt"><div class="sw" data-a="tg:voice"><div class="swl">' +
+      '<span style="display:flex;font-size:20px">🎙️</span><div><div class="swt">الغرفة الصوتية (دور الكلام)</div>' +
+      '<div class="sws">واحد بيتكلم في المرة والباقي بيسمعوا — الترتيب بيتخلط كل راوند</div></div></div>' +
+      '<div class="knob' + (cfg.voice ? " on" : "") + '"><i></i></div></div>';
+    if (cfg.voice) {
+      h += '<div class="row"><div class="swl"><span style="display:flex;font-size:19px">⏱️</span>' +
+        '<div><div class="swt">وقت كل واحد</div><div class="sws">من ١٥ ثانية لـ٢ دقيقة</div></div></div>' +
+        '<div class="step"><button data-a="voiceSec:-15">−</button><div class="v">' + mmss(cfg.speakSeconds || 45) + '</div><button data-a="voiceSec:15">+</button></div></div>';
+      h += '<div class="row" style="border-bottom:0"><div class="swl"><span style="display:flex;font-size:19px">🗣️</span>' +
+        '<div><div class="swt">كلام مفتوح آخر الراوند</div><div class="sws">' +
+        ((cfg.openFloorSeconds || 0) > 0 ? "الكل بيتكلم مع بعض قبل التصويت" : "مقفول — التصويت على طول") + '</div></div></div>' +
+        '<div class="step"><button data-a="openSec:-15">−</button><div class="v">' +
+        ((cfg.openFloorSeconds || 0) > 0 ? mmss(cfg.openFloorSeconds) : "—") + '</div><button data-a="openSec:15">+</button></div></div>';
+      var totalMin = Math.round(((cfg.speakSeconds || 45) * n + (cfg.openFloorSeconds || 0)) / 60 * 10) / 10;
+      h += '<p class="d" style="font-size:12px;padding:0 4px 10px">الراوند الواحد هياخد حوالي <b style="color:var(--parch)">' +
+        totalMin + ' دقيقة</b> مع ' + ar(n) + ' لاعيبة. لو كتير، قلّل وقت الواحد.</p>';
+    }
+    h += "</div>";
     h += '<div class="card">' +
       toggleRow("doctor", cfg.doctor, "الدكتور", "بينقذ اللي اتضرب") +
       toggleRow("cop", cfg.cop, "الضابط", "بيضرب كل ليلة واحد بيشك فيه") +
@@ -2194,11 +2854,110 @@ var farewellTarget = null; // اللاعب المختار لإرسال السر 
 var voteSel = [];          // اللي أنا مختارهم دلوقتي في التصويت (قبل التأكيد)
 var voteKey = null;        // بيتغيّر كل جولة تصويت جديدة عشان نصفّر الاختيار
 
+function speakPanel() {
+  var sp = state.speak;
+  if (!sp) return "";
+  var left = sp.paused ? (sp.remaining || 0) / 1000
+    : (sp.endsAt ? Math.max(0, (sp.endsAt - Date.now()) / 1000) : 0);
+  var warn = left <= 5 && !sp.paused;
+  var isOpen = sp.mode === "open";
+  var isReply = sp.mode === "reply";
+  var h = "";
+
+  // اللافتة الكبيرة: مين بيتكلم دلوقتي
+  var accent = isOpen ? "var(--teal)" : isReply ? "var(--saffron)" : "var(--madder)";
+  h += '<div style="border:1px solid ' + accent + '66;background:' + accent + '1A;border-radius:18px;padding:15px;margin-bottom:12px">';
+  h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">' +
+    '<div style="min-width:0">' +
+    '<div style="font-family:var(--body);font-weight:800;font-size:11.5px;letter-spacing:1px;color:' + accent + '">' +
+    (isOpen ? "الكلام مفتوح للكل" : isReply ? "حق الرد" : "دور الكلام") + "</div>" +
+    '<div style="font-family:var(--disp);font-size:26px;color:var(--parch);line-height:1.2">' +
+    (isOpen ? "اتكلّموا كلكم" : esc(sp.speakerName || "—")) + "</div></div>" +
+    '<div id="spkTimer" style="font-family:var(--disp);font-size:34px;color:' + (warn ? "var(--madder)" : "var(--parch)") + '">' +
+    (sp.paused ? "⏸" : mmss(left)) + "</div></div>";
+
+  // شريط الوقت
+  var totalSec = isOpen ? (state.cfg.openFloorSeconds || 45) : isReply ? (state.cfg.replySeconds || 20) : (state.cfg.speakSeconds || 45);
+  var pct = Math.max(0, Math.min(100, (left / Math.max(1, totalSec)) * 100));
+  h += '<div style="height:6px;border-radius:3px;background:rgba(255,255,255,.1);margin-top:10px;overflow:hidden">' +
+    '<div id="spkBar" style="height:100%;width:' + pct + '%;background:' + (warn ? "var(--madder)" : accent) + ';transition:width .3s linear"></div></div>';
+
+  if (!isOpen) {
+    h += '<div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11.5px;color:var(--muted)">' +
+      "<span>" + ar(sp.position) + " من " + ar(sp.total) + "</span>" +
+      "<span>" + (sp.nextName ? "بعده: " + esc(sp.nextName) : "آخر واحد") + "</span></div>";
+  }
+  h += "</div>";
+
+  // حالتي أنا
+  if (sp.iSpeak) {
+    h += '<div style="border:1px solid rgba(233,163,60,.5);background:rgba(233,163,60,.14);border-radius:16px;padding:13px;margin-bottom:10px">' +
+      '<div style="display:flex;align-items:center;gap:9px">' +
+      '<span style="font-size:20px">🎙️</span>' +
+      '<div style="flex:1"><div style="font-weight:800;font-size:14px;color:var(--saffron)">دورك دلوقتي — اتكلّم!</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-top:2px">' +
+      (Voice.micState === "denied" ? "المايك مرفوض — اسمح بيه من إعدادات المتصفح"
+        : Voice.micState === "unsupported" ? "المتصفح ده مش بيدعم الصوت"
+        : Voice.speaking ? "المايك مفتوح، الكل بيسمعك" : "بنفتح المايك…") + "</div>" +
+      '<div style="height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin-top:7px;overflow:hidden">' +
+      '<div id="micBar" style="height:100%;width:0%;background:var(--saffron);transition:width .1s"></div></div>' +
+      "</div></div>" +
+      '<button class="btn dark sm mt" style="font-size:13px;padding:10px" data-a="speakDone">✓ خلّصت كلامي</button>' +
+      "</div>";
+  } else if (!isOpen) {
+    var linked = !!(Voice.inPc && Voice.inPc.connectionState === "connected");
+    var vOn = state.cfg.voice && Voice.micState !== "unsupported";
+    h += '<div style="display:flex;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.1);' +
+      'background:rgba(255,255,255,.03);border-radius:14px;padding:11px 13px;margin-bottom:10px">' +
+      '<span style="font-size:18px">🔇</span><div style="flex:1;font-size:12.5px;color:var(--muted)">' +
+      "مايكك مقفول دلوقتي — اسمع بس لحد ما ييجي دورك" +
+      (vOn ? '<div style="font-size:11px;color:' + (linked ? "var(--teal)" : "var(--faint)") + ';margin-top:3px">' +
+        (linked ? "● متوصّل بصوت " + esc(sp.speakerName || "") : "○ بنتوصّل بالصوت…") + "</div>" : "") +
+      "</div>" +
+      (sp.canRaise
+        ? '<button class="btn ghost sm" style="font-size:12px;padding:7px 11px;margin:0;width:auto" data-a="speakHand">' +
+          (sp.handUp ? "✋ طلبك مسجّل" : "✋ عايز أرد") + "</button>"
+        : "") + "</div>";
+  } else {
+    h += '<div style="display:flex;align-items:center;gap:9px;border:1px solid rgba(45,157,145,.45);' +
+      'background:rgba(45,157,145,.13);border-radius:14px;padding:11px 13px;margin-bottom:10px">' +
+      '<span style="font-size:18px">🗣️</span><div style="font-size:12.5px;color:var(--parch)">' +
+      "الكلام مفتوح — اتكلّموا مع بعض بصوتكم في الأوضة قبل التصويت</div></div>";
+  }
+
+  if (sp.waiting) h += '<p class="d ctr" style="font-size:12px;margin-bottom:8px">✋ ' + ar(sp.waiting) + " مستنيين حق الرد</p>";
+
+  // تحكّم المضيف
+  if (state.you.isHost) {
+    h += '<div style="display:flex;gap:6px;margin-bottom:10px">' +
+      '<button class="btn ghost sm" style="flex:1;font-size:12px;padding:9px;margin:0" data-a="speakAdd:15">+١٥ث</button>' +
+      '<button class="btn ghost sm" style="flex:1;font-size:12px;padding:9px;margin:0" data-a="speakPause">' + (sp.paused ? "▶ كمّل" : "⏸ وقّف") + "</button>" +
+      '<button class="btn ghost sm" style="flex:1;font-size:12px;padding:9px;margin:0" data-a="speakDone">⏭ التالي</button>' +
+      "</div>";
+  }
+  return h;
+}
+
 function dayScreen() {
   var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : null;
   var alive = state.players.filter(function (p) { return p.alive; });
-  var h = '<p class="eb">راوند الكلام ' + ar(state.talkRound) + " من " + ar(state.talkRounds) + '</p><h1 class="t">اتكلّموا</h1>' +
-    '<p class="d">كل واحد يقول رأيه ويدافع عن نفسه.</p>';
+  var h = '<p class="eb">راوند الكلام ' + ar(state.talkRound) + " من " + ar(state.talkRounds) + '</p><h1 class="t">اتكلّموا</h1>';
+
+  // لو الغرفة الصوتية شغّالة، بنعرض نظام الدور بدل التايمر العادي
+  if (state.speak) {
+    h += '<p class="d" style="margin-bottom:12px">واحد بيتكلم في المرة — الباقي بيسمعوا.</p>';
+    h += speakPanel();
+    h += '<div class="ctr"><div class="emos">' + ["😂", "😱", "🤨", "👀", "🔪", "🙏"].map(function (e) {
+      return '<button class="emo" data-emo="' + e + '">' + e + "</button>";
+    }).join("") + "</div></div>";
+    if (state.you.isHost) {
+      h += '<button class="btn" data-a="next">' + (state.talkRound < state.talkRounds ? "الراوند اللي بعده" : "ابدأ التصويت") + "</button>";
+      h += '<button class="btn ghost sm mt" style="font-size:12.5px;padding:10px" data-a="speakRestart">🔀 اخلط الترتيب وابدأ الراوند من الأول</button>';
+    } else h += '<p class="d ctr">مستنيين المضيف يكمّل…</p>';
+    return h;
+  }
+
+  h += '<p class="d">كل واحد يقول رأيه ويدافع عن نفسه.</p>';
   h += '<div class="mid ctr">';
   if (state.deadline) {
     h += '<div class="timer"' + (left !== null && left < 15 ? ' style="color:var(--madder)"' : "") + ">" + mmss(left || 0) + "</div>";
@@ -2511,6 +3270,23 @@ function voteHistoryHTML() {
 function uiSheetHTML() {
   if (!uiSheet) return "";
   if (uiSheet.t === "about") {
+    if (uiSheet.game === "task") {
+      var ht = '<div class="sheet" data-a="closeSheet"><div class="sheetin" data-stop="1"><p class="eb">المهمة السرية</p>' +
+        '<p class="d" style="font-size:14px;line-height:1.8">لعبة بتتلعب جوّه قعدتكم العادية. مفيش أدوار ولا لف — إنتوا قاعدين بتتكلموا طبيعي، وكل واحد معاه مهمة سرية على موبايله ينفّذها من غير ما حد ياخد باله.</p>' +
+        '<p class="eb" style="margin-top:18px">إزاي بتكسب</p>' +
+        '<div style="font-size:13.5px;color:var(--muted);line-height:1.8">' +
+        '• <b style="color:var(--parch)">نفّذ مهمتك</b> والجولة تخلص من غير ما حد يكشفك = +نقطة.<br>' +
+        '• <b style="color:var(--parch)">اكشف حد</b> نفّذ مهمته (تسجّل شكّك فيه في السر) = +نقطة.<br>' +
+        '• <b style="color:var(--parch)">اتسرّعت</b> وشكّيت في حد مانفّذش = −نقطة. فالشك مغامرة.<br></div>' +
+        '<p class="eb" style="margin-top:18px">نوعين المهام</p>' +
+        '<div style="font-size:13.5px;color:var(--muted);line-height:1.8">' +
+        '• <b style="color:var(--saffron)">خلّي حد…</b> تستدرج حد تاني يقول أو يعمل حاجة.<br>' +
+        '• <b style="color:var(--saffron)">إنت اعمل…</b> تعمل إنت حاجة بهدوء وسط الكلام.<br></div>' +
+        '<p class="eb" style="margin-top:18px">نصايح</p>' +
+        '<p class="d" style="font-size:13.5px;line-height:1.7">الشك سري — محدش يعرف إنك شاكك فيه، فالعب بوشّين: اتكلم عادي وإنت بتراقب. وأحلى لحظة هي كشف النتايج آخر كل جولة.</p>' +
+        '<button class="btn ghost mt" data-a="closeSheet">تمام</button></div></div>';
+      return ht;
+    }
     var h = '<div class="sheet" data-a="closeSheet"><div class="sheetin" data-stop="1"><p class="eb">الأدوار</p>';
     ["thief", "villager", "doctor", "cop", "traitor", "rami"].forEach(function (r) {
       h += '<div style="display:flex;gap:11px;padding:12px 0;border-bottom:1px solid var(--line)">' +
@@ -2521,6 +3297,7 @@ function uiSheetHTML() {
     h += '<p class="eb" style="margin-top:18px">قواعد مهمة</p>' +
       '<div style="font-size:13.5px;color:var(--muted);line-height:1.7">' +
       '• <b style="color:var(--parch)">المكسب:</b> أهل القرية يكسبوا لما يمسكوا كل الحرامية. الحرامية يكسبوا لما يخرج العدد اللي المضيف حدّده من أهل القرية — وكل اللي مش حرامي (الخاين والدكتور والضابط والرصاصة الأخيرة وغيرهم) محسوب على أهل القرية.<br>' +
+      '• <b style="color:var(--parch)">الغرفة الصوتية:</b> لو مفعّلة، واحد بس بيتكلم في المرة والباقي بيسمعوا. الترتيب بيتخلط كل راوند فكل واحد بيتكلم مرة واحدة. تقدر تدوس "خلّصت" تنهي دورك بدري، أو "عايز أرد" تاخد فرصة قصيرة ترد بيها لو حد اتهمك. وآخر الراوند فيه وقت الكلام فيه مفتوح للكل.<br>' +
       '• <b style="color:var(--parch)">تنبيه التعادل:</b> لما يخرج العدد اللي المضيف حدّده من أهل القرية، إشعار بيوصل للكل إن الدور بقى متعادل وفاضل كام واحد بس على مكسب الحرامية.<br>' +
       '• <b style="color:var(--parch)">الكشف عن الهوية:</b> مفيش حد بتتكشف هويته وهو لسه في الدور بيلعب — الهوية بتظهر بس لما اللاعب يطلع برّا (بالتصويت أو الليل أو الرصاصة الأخيرة).<br>' +
       '• <b style="color:var(--parch)">التعادل:</b> لو الأصوات اتعادلت، بتتعمل إعادة على المتعادلين بس، والمتعادلين نفسهم مبيصوّتوش فيها، لحد ما حد يطلع.<br>' +
@@ -2810,6 +3587,7 @@ function render() {
     if (!showLandscape) renderChatPanel(); // في العرض العريض الشات ظاهر جوه العمود مش عايم
     renderFarewellModal();
     renderTieModal();
+    try { voiceSync(); } catch (e) { /* الصوت مبيوقّعش اللعبة أبدًا */ }
     if (!state || state.phase !== "tally") voteStatIdx = null;
     renderVoteStat();
     renderUndoButton();
@@ -3140,6 +3918,428 @@ function renderVoteStat() {
   host.onclick = function (ev) { if (!ev.target.closest("[data-stop]")) close(); };
 }
 
+/* ======================= الغرفة الصوتية (WebRTC) =======================
+ * الفكرة: واحد بس بيتكلم في المرة. فبدل ما كل الـ١٥ يتوصّلوا ببعض (١٠٥
+ * اتصالات)، اللي دوره بس هو اللي بيفتح اتصال ناحية الباقي (١٤ اتصال في
+ * اتجاه واحد). ده بيخلي ١٥ لاعب سهلين جدًا على الموبايل والنت.
+ *
+ * الأمان: مين دوره دلوقتي بيتحدد من المضيف (HostBrain) مش من المتصفح،
+ * واللي مش دوره ببساطة *مبيفتحش الميكروفون أصلًا* — مش بيبعت وهو مكتوم.
+ * فحتى لو حد عدّل الكود عنده، مفيش قناة صوت مفتوحة يبعت من خلالها.
+ *
+ * فايربيز بيلعب دور "الوسيط" اللي بيوصّل الأجهزة ببعض (signaling) — مجاني
+ * وشغّال أصلًا في اللعبة.
+ */
+var Voice = {
+  micState: "idle",      // idle | asking | ready | denied | unsupported
+  localStream: null,
+  pcs: {},               // uid -> RTCPeerConnection (لما أبقى أنا المتكلم)
+  inPc: null,            // الاتصال الجاي من المتكلم (لما أبقى سامع)
+  inFrom: null,
+  audioEl: null,
+  sid: null,             // معرّف الدور الحالي (عشان نتجاهل رسايل قديمة)
+  speaking: false,
+  wired: false,
+  level: 0,              // مؤشر إن في صوت طالع
+  wroteTo: [],
+  _unsubs: [],
+  _handled: {},
+};
+
+var ICE_SERVERS = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  // سيرفر وسيط مجاني — بيساعد الشبكات المقفولة. لو اتعطّل، الصوت لسه
+  // بيشتغل على أغلب الشبكات عن طريق STUN.
+  { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+];
+
+function voiceSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.RTCPeerConnection);
+}
+
+/** بنطلب إذن المايك مرة واحدة بدري (لازم يكون بعد ضغطة من اللاعب).
+ *  كده لما ييجي دوره ميضيّعش وقته في نافذة الإذن. */
+async function voiceAskMic() {
+  if (!voiceSupported()) { Voice.micState = "unsupported"; render(); return false; }
+  if (Voice.micState === "ready") return true;
+  Voice.micState = "asking"; render();
+  try {
+    var st = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+    // بنقفل المسارات على طول — الإذن اتاخد خلاص، وهنفتحه تاني بسرعة وقت الدور
+    st.getTracks().forEach(function (t) { t.stop(); });
+    Voice.micState = "ready"; render();
+    return true;
+  } catch (e) {
+    Voice.micState = "denied"; render();
+    return false;
+  }
+}
+
+function voicePath(sub) { return "rooms/" + client.code + "/" + sub; }
+
+/** بيقفل كل الاتصالات ويطفي المايك */
+function voiceTeardown() {
+  // بنمسح رسايل التوصيل اللي كتبناها عشان متتكدّسش في قاعدة البيانات
+  try {
+    (Voice.wroteTo || []).forEach(function (uid) {
+      window.__backend.remove(voicePath("rtc/" + uid + "/" + client.uid));
+    });
+    if (Voice.speaking) window.__backend.remove(voicePath("ice/" + client.uid));
+  } catch (e) {}
+  Voice.wroteTo = [];
+  try {
+    Object.keys(Voice.pcs).forEach(function (u) {
+      try { Voice.pcs[u].close(); } catch (e) {}
+    });
+  } catch (e) {}
+  Voice.pcs = {};
+  if (Voice.inPc) { try { Voice.inPc.close(); } catch (e) {} Voice.inPc = null; Voice.inFrom = null; }
+  if (Voice.localStream) {
+    Voice.localStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+    Voice.localStream = null;
+  }
+  if (Voice.audioEl) { try { Voice.audioEl.srcObject = null; } catch (e) {} }
+  Voice.speaking = false;
+  Voice.level = 0;
+}
+
+function voiceAudioEl() {
+  if (!Voice.audioEl) {
+    var a = document.createElement("audio");
+    a.id = "voiceAudio";
+    a.autoplay = true;
+    a.playsInline = true;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    Voice.audioEl = a;
+  }
+  return Voice.audioEl;
+}
+
+/** بيشغّل الاستماع لرسايل التوصيل الجاية ليّا (مرة واحدة لكل أوضة) */
+function voiceWire() {
+  if (Voice.wired || !client || !client.code || !window.__backend) return;
+  Voice.wired = true;
+  var me = client.uid;
+  var be = window.__backend;
+
+  // عروض/ردود الاتصال
+  Voice._unsubs.push(be.onValue(voicePath("rtc/" + me), function (obj) {
+    if (!obj) return;
+    Object.keys(obj).forEach(function (from) {
+      var m = obj[from];
+      if (!m || !m.sdp || !m.type) return;
+      var key = from + ":" + m.type + ":" + (m.sid || "");
+      if (Voice._handled[key]) return;
+      Voice._handled[key] = 1;
+      if (m.type === "offer") voiceOnOffer(from, m);
+      else if (m.type === "answer") voiceOnAnswer(from, m);
+    });
+  }));
+
+  // مرشّحات الشبكة
+  Voice._unsubs.push(be.onChildAdded(voicePath("ice/" + me), function (val) {
+    if (!val || !val.c) return;
+    try {
+      var pc = (Voice.inFrom === val.from) ? Voice.inPc : Voice.pcs[val.from];
+      if (pc && pc.remoteDescription) pc.addIceCandidate(new RTCIceCandidate(val.c)).catch(function () {});
+    } catch (e) {}
+  }));
+}
+
+function voiceSendIce(toUid, cand) {
+  try {
+    window.__backend.push(voicePath("ice/" + toUid), { from: client.uid, c: cand.toJSON ? cand.toJSON() : cand });
+  } catch (e) {}
+}
+
+/** أنا سامع: وصلني عرض من المتكلم */
+async function voiceOnOffer(from, m) {
+  try {
+    if (Voice.inPc) { try { Voice.inPc.close(); } catch (e) {} }
+    var pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    Voice.inPc = pc; Voice.inFrom = from;
+    pc.onicecandidate = function (ev) { if (ev.candidate) voiceSendIce(from, ev.candidate); };
+    pc.ontrack = function (ev) {
+      var a = voiceAudioEl();
+      a.srcObject = ev.streams[0];
+      var p = a.play();
+      if (p && p.catch) p.catch(function () { /* المتصفح ممكن يمنع التشغيل قبل أي لمسة */ });
+    };
+    await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
+    var ans = await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    window.__backend.set(voicePath("rtc/" + from + "/" + client.uid), {
+      type: "answer", sdp: ans.sdp, sid: m.sid || null,
+    });
+    Voice.wroteTo.push(from);
+  } catch (e) { /* لو فشل، المضيف يقدر يتخطّى */ }
+}
+
+/** أنا المتكلم: وصلني رد من سامع */
+async function voiceOnAnswer(from, m) {
+  try {
+    var pc = Voice.pcs[from];
+    if (!pc || pc.signalingState === "stable") return;
+    await pc.setRemoteDescription({ type: "answer", sdp: m.sdp });
+  } catch (e) {}
+}
+
+/** أنا دوري أتكلم: بفتح المايك وأبعت لكل الباقيين */
+async function voiceBecomeSpeaker(sid, peerUids) {
+  if (Voice.speaking && Voice.sid === sid) return;
+  voiceTeardown();
+  Voice.sid = sid;
+  if (!voiceSupported()) { Voice.micState = "unsupported"; return; }
+  try {
+    Voice.localStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+    Voice.micState = "ready";
+  } catch (e) {
+    Voice.micState = "denied"; render();
+    return;
+  }
+  Voice.speaking = true;
+  var track = Voice.localStream.getAudioTracks()[0];
+  voiceMeter(Voice.localStream);
+
+  peerUids.forEach(async function (uid) {
+    if (!uid || uid === client.uid) return;
+    try {
+      var pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      Voice.pcs[uid] = pc;
+      pc.addTrack(track, Voice.localStream);
+      pc.onicecandidate = function (ev) { if (ev.candidate) voiceSendIce(uid, ev.candidate); };
+      var off = await pc.createOffer();
+      await pc.setLocalDescription(off);
+      window.__backend.set(voicePath("rtc/" + uid + "/" + client.uid), {
+        type: "offer", sdp: off.sdp, sid: sid,
+      });
+      Voice.wroteTo.push(uid);
+    } catch (e) {}
+  });
+  render();
+}
+
+/** مؤشر بسيط إن في صوت خارج فعلًا (بيطمّن اللاعب إن المايك شغّال) */
+function voiceMeter(stream) {
+  try {
+    var c = actx(); if (!c) return;
+    var src = c.createMediaStreamSource(stream);
+    var an = c.createAnalyser(); an.fftSize = 256;
+    src.connect(an);
+    var buf = new Uint8Array(an.frequencyBinCount);
+    var tick = function () {
+      if (!Voice.speaking) return;
+      an.getByteFrequencyData(buf);
+      var sum = 0; for (var i = 0; i < buf.length; i++) sum += buf[i];
+      Voice.level = Math.min(1, (sum / buf.length) / 60);
+      var bar = document.getElementById("micBar");
+      if (bar) bar.style.width = Math.round(Voice.level * 100) + "%";
+      requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (e) {}
+}
+
+/** بيتنادى مع كل تحديث للحالة: بيظبّط الصوت حسب مين دوره دلوقتي */
+function voiceSync() {
+  if (!state || !client || !state.cfg || !state.cfg.voice) {
+    if (Voice.speaking || Voice.inPc) voiceTeardown();
+    return;
+  }
+  voiceWire();
+  var sp = state.speak;
+  if (!sp || state.phase !== "day") { if (Voice.speaking || Voice.inPc) voiceTeardown(); return; }
+
+  // معرّف فريد للدور الحالي — لو اتغيّر يبقى الدور اتبدّل
+  var sid = String(state.day) + "-" + String(state.talkRound) + "-" + String(sp.speakerId) + "-" + String(sp.position) + "-" + sp.mode;
+
+  if (sp.iSpeak) {
+    if (Voice.sid !== sid || !Voice.speaking) {
+      var peers = (state.players || []).filter(function (p) {
+        return p.uid && p.uid !== client.uid && p.alive && p.connected !== false;
+      }).map(function (p) { return p.uid; });
+      voiceBecomeSpeaker(sid, peers);
+    }
+  } else {
+    // مش دوري: بقفل المايك خالص وأستنى صوت المتكلم
+    if (Voice.speaking) { voiceTeardown(); Voice.sid = sid; }
+    else Voice.sid = sid;
+  }
+}
+
+
+/* ==================== شاشات لعبة المهمة السرية ==================== */
+
+function taskLobbyScreen() {
+  var isHost = state.you.isHost, cfg = state.cfg, n = state.players.length;
+  var h = '<div class="fade">';
+  h += '<p class="eb">كود الأوضة — ابعته لأصحابك</p><div class="codebig">' + esc(state.code) + "</div>" +
+    '<p class="codehint">هما يفتحوا نفس اللينك ويكتبوا الكود ده</p></div>';
+
+  h += '<div class="card mt"><p class="eb">الشلّة (' + ar(n) + ")</p><div class=\"plist\">";
+  state.players.forEach(function (p) {
+    h += '<div class="prow"><div class="dotc' + (p.connected === false ? " off" : "") + '"></div>' +
+      '<div class="nm">' + esc(p.name) + (p.isHost ? " ★" : "") + "</div>" +
+      '<div class="tg">' + (p.connected === false ? "مقطوع" : "جاهز") + "</div>" +
+      (isHost && !p.isHost
+        ? '<button data-a="kick:' + p.id + '" style="flex:none;margin-inline-start:8px;width:26px;height:26px;border-radius:50%;' +
+          "border:1px solid rgba(209,72,63,.5);background:rgba(209,72,63,.16);color:#F0A9A3;font-size:14px;line-height:1;cursor:pointer;padding:0\">×</button>"
+        : "") + "</div>";
+  });
+  h += "</div></div>";
+
+  if (isHost) {
+    h += '<div class="card mt"><p class="eb">إعدادات اللعبة</p>';
+    // عدد الجولات
+    h += '<div class="row"><div class="swl"><span style="display:flex;font-size:19px">🔁</span>' +
+      '<div><div class="swt">عدد الجولات</div><div class="sws">من ١ لـ١٠</div></div></div>' +
+      '<div class="step"><button data-a="taskRounds:-1">−</button><div class="v">' + ar(cfg.rounds) + '</div><button data-a="taskRounds:1">+</button></div></div>';
+    // مدة الجولة
+    h += '<div class="row"><div class="swl"><span style="display:flex;font-size:19px">⏱️</span>' +
+      '<div><div class="swt">مدة الجولة</div><div class="sws">من ١ لـ١٥ دقيقة</div></div></div>' +
+      '<div class="step"><button data-a="taskMin:-1">−</button><div class="v">' + ar(cfg.minutes) + ' د</div><button data-a="taskMin:1">+</button></div></div>';
+    // توابل
+    h += taskToggle("doubleTask", cfg.doubleTask, "مهمة مزدوجة", "أحيانًا لاعب ياخد مهمتين — نقط أكتر ومخاطرة أعلى");
+    h += taskToggle("counterTask", cfg.counterTask, "مهمة مضادة", "أحيانًا مهمتك تكون تمنع نفسك من حاجة (متضحكش مثلًا)");
+    h += taskToggleLast("openFinal", cfg.openFinal, "الجولة الأخيرة مكشوفة", "في آخر جولة الكل يشوف مهام بعض — فوضى وضحك");
+    h += "</div>";
+    h += '<div class="soft mt"><div style="font-size:12.5px;color:var(--muted);line-height:1.7">' +
+      "المهمة السرية: كل واحد ياخد مهمة على موبايله. نفّذها من غير ما حد ياخد باله = <b style=\"color:var(--parch)\">+نقطة</b>. " +
+      "اكشف حد نفّذ = <b style=\"color:var(--parch)\">+نقطة</b>. اتسرّعت وشكّيت غلط = <b style=\"color:var(--parch)\">-نقطة</b>.</div></div>";
+    if (n < 3) h += '<p class="d ctr mt">محتاجين ٣ على الأقل عشان نبدأ.</p>';
+    else h += '<button class="btn mt" data-a="start">ابدأوا اللعب</button>';
+  } else {
+    h += '<p class="d ctr mt">مستنيين المضيف يبدأ اللعبة… جهّزوا نفسكم للكلام العادي 😏</p>';
+  }
+  h += "</div>";
+  return h;
+}
+
+function taskToggle(key, on, title, sub) {
+  return '<div class="sw" data-a="tt:' + key + '"><div class="swl"><span style="display:flex;font-size:19px">✨</span>' +
+    '<div><div class="swt">' + title + '</div><div class="sws">' + sub + "</div></div></div>" +
+    '<div class="knob' + (on ? " on" : "") + '"><i></i></div></div>';
+}
+function taskToggleLast(key, on, title, sub) {
+  return '<div class="sw" style="border-bottom:0" data-a="tt:' + key + '"><div class="swl"><span style="display:flex;font-size:19px">🎭</span>' +
+    '<div><div class="swt">' + title + '</div><div class="sws">' + sub + "</div></div></div>" +
+    '<div class="knob' + (on ? " on" : "") + '"><i></i></div></div>';
+}
+
+function taskPlayScreen() {
+  var you = state.you;
+  var left = state.deadline ? Math.max(0, (state.deadline - Date.now()) / 1000) : 0;
+  var h = '<div class="fade"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+    '<p class="eb" style="margin:0">جولة ' + ar(state.round) + " من " + ar(state.rounds) + "</p>" +
+    '<span class="timer" style="font-size:26px">' + mmss(left) + "</span></div>";
+
+  // مهمتك السرية
+  if (you.tasks && you.tasks.length) {
+    you.tasks.forEach(function (t, i) {
+      var isCounter = t.kind === "counter";
+      var col = isCounter ? "var(--madder)" : t.kind === "double" ? "var(--violet)" : "var(--saffron)";
+      var label = isCounter ? "مهمة مضادة" : t.kind === "double" ? "مهمة إضافية" : (t.type === "bait" ? "خلّي حد…" : "إنت اعمل…");
+      h += '<div style="border:1px solid ' + col + '66;background:' + col + '18;border-radius:16px;padding:15px;margin-bottom:' + (i < you.tasks.length - 1 ? "8px" : "12px") + '">' +
+        '<div style="font-family:var(--body);font-weight:800;font-size:11.5px;letter-spacing:1px;color:' + col + '">' + label + "</div>" +
+        '<div style="font-family:var(--disp);font-size:21px;color:var(--parch);line-height:1.35;margin-top:4px">' + esc(t.text) + "</div></div>";
+    });
+  }
+
+  // زرار "نفّذتها"
+  h += '<button class="btn ' + (you.done ? "dark" : "") + '" style="margin-bottom:10px" data-a="taskDone">' +
+    (you.done ? "✓ نفّذتها" : "نفّذت مهمتي") + "</button>";
+  if (you.done) h += '<p class="d ctr" style="font-size:12px;margin:-4px 0 12px">تمام — استنى النتيجة آخر الجولة. تقدر تكمّل كلام عادي.</p>';
+
+  // الشك السري
+  h += '<div class="card"><p class="eb">تشك في مين؟ (سري)</p>' +
+    '<p class="d" style="font-size:12px;margin-bottom:10px">لو حسّيت إن حد بينفّذ مهمة، سجّله هنا. صح = +نقطة. غلط = -نقطة. محدش هيعرف إنك شاكك.</p>' +
+    '<div class="grid">';
+  state.players.filter(function (p) { return p.id !== you.id; }).forEach(function (p) {
+    var sel = you.suspect === p.id;
+    h += '<button data-a="suspect:' + p.id + '" class="pick' + (sel ? " sel" : "") + '">' + esc(p.name) +
+      (sel ? '<div class="pickVoted">شاكك فيه</div>' : "") + "</button>";
+  });
+  h += "</div>";
+  if (you.suspect !== null && you.suspect !== undefined)
+    h += '<button class="btn ghost sm mt" style="font-size:12px;padding:9px" data-a="suspect:null">شيل شكّي</button>';
+  h += "</div>";
+
+  // إيموجي خفيفة
+  h += '<div class="ctr mt"><div class="emos">' + ["😂", "😱", "🤨", "👀", "🤫", "🔥"].map(function (e) {
+    return '<button class="emo" data-emo="' + e + '">' + e + "</button>";
+  }).join("") + "</div></div>";
+
+  if (state.you.isHost) {
+    h += '<button class="btn dark mt" data-a="endRound">اقفل الجولة دلوقتي</button>';
+  }
+  return h + "</div>";
+}
+
+function taskRevealScreen() {
+  var r = state.reveal;
+  if (!r) return '<div class="mid ctr"><div class="spin"></div></div>';
+  var h = '<div class="fade"><p class="eb">نتيجة جولة ' + ar(r.round) + '</p><h1 class="t">كشف المستور 🎭</h1>' +
+    '<p class="d" style="margin-bottom:12px">اللي نفّذ، اللي اتكشف، ومين اتسرّع في الشك.</p>';
+
+  h += '<div class="card">';
+  r.detail.forEach(function (d) {
+    var status, col;
+    if (d.did && !d.caught) { status = "نفّذ ومحدش كشفه ✓"; col = "var(--teal)"; }
+    else if (d.did && d.caught) { status = "نفّذ بس اتكشف!"; col = "var(--madder)"; }
+    else { status = "منفّذش مهمته"; col = "var(--faint)"; }
+    h += '<div style="padding:11px 0;border-bottom:1px solid var(--line)">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+      '<span style="font-weight:800;color:var(--parch)">' + esc(d.name) + "</span>" +
+      '<span style="font-size:12px;font-weight:700;color:' + col + '">' + status + "</span></div>";
+    if (d.accusers && d.accusers.length)
+      h += '<div style="font-size:11.5px;color:var(--muted);margin-top:3px">شكّ فيه: ' + esc(d.accusers.join("، ")) + "</div>";
+    if (d.tasks && d.tasks.length)
+      h += '<div style="font-size:11.5px;color:var(--faint);margin-top:3px">كانت مهمته: ' + esc(d.tasks.join(" · ")) + "</div>";
+    h += "</div>";
+  });
+  h += "</div>";
+
+  // الترتيب
+  h += '<div class="card mt"><p class="eb">النقط</p>';
+  r.scores.forEach(function (sc, i) {
+    h += '<div class="vr"><div class="nm">' + (i === 0 ? "👑 " : "") + esc(sc.name) + "</div><div class=\"c\">" + ar(sc.score) + "</div></div>";
+  });
+  h += "</div>";
+
+  if (state.you.isHost) {
+    h += '<button class="btn mt" data-a="nextRound">' + (r.final ? "شوف النتيجة النهائية" : "الجولة اللي بعدها") + "</button>";
+  } else h += '<p class="d ctr mt">مستنيين المضيف يكمّل…</p>';
+  return h + "</div>";
+}
+
+function taskOverScreen() {
+  var r = state.reveal;
+  var st = (r && r.scores) || state.standings || [];
+  var winner = st[0];
+  var h = '<div class="fade ctr"><p class="eb">خلصت اللعبة</p>';
+  if (winner) {
+    h += '<div style="margin:14px 0">' + ctrEmblem("villager", 60, "var(--saffron)") + "</div>";
+    h += '<h1 class="t">🏆 ' + esc(winner.name) + "</h1>" +
+      '<p class="d" style="margin-bottom:14px">كسب بـ ' + ar(winner.score) + " نقطة</p>";
+  }
+  h += '<div class="card" style="text-align:right">';
+  st.forEach(function (sc, i) {
+    h += '<div class="vr' + (i === 0 ? " lead" : "") + '"><div class="nm">' + (i === 0 ? "👑 " : ar(i + 1) + ". ") + esc(sc.name) + "</div><div class=\"c\">" + ar(sc.score) + "</div></div>";
+  });
+  h += "</div>";
+  if (state.you.isHost) h += '<button class="btn mt" data-a="again">إلعبوا تاني</button>';
+  else h += '<p class="d mt">مستنيين المضيف…</p>';
+  return h + "</div>";
+}
+
 function renderFarewellModal() {
   var host = document.getElementById("farewellModal");
   var fw = state && state.farewellForMe;
@@ -3178,7 +4378,41 @@ function bindFlip() {
 }
 
 // عداد الوقت المرئي بس (المضيف هو اللي بيقرر فعليًا في الخلفية)
+/** تحديث خفيف كل ثانية لشاشة دور الكلام — بنغيّر العدّاد والشريط بس،
+ *  من غير ما نعيد بناء الشاشة كلها (عشان مفيش رجفة ولا الصفحة تنطّ). */
+function speakTick() {
+  var sp = state && state.speak;
+  if (!sp) return;
+  var left = sp.paused ? (sp.remaining || 0) / 1000
+    : (sp.endsAt ? Math.max(0, (sp.endsAt - Date.now()) / 1000) : 0);
+  var warn = left <= 5 && !sp.paused;
+  var t = document.getElementById("spkTimer");
+  if (t) {
+    t.textContent = sp.paused ? "⏸" : mmss(left);
+    t.style.color = warn ? "var(--madder)" : "var(--parch)";
+  }
+  var bar = document.getElementById("spkBar");
+  if (bar) {
+    var totalSec = sp.mode === "open" ? (state.cfg.openFloorSeconds || 45)
+      : sp.mode === "reply" ? (state.cfg.replySeconds || 20) : (state.cfg.speakSeconds || 45);
+    bar.style.width = Math.max(0, Math.min(100, (left / Math.max(1, totalSec)) * 100)) + "%";
+    if (warn) bar.style.background = "var(--madder)";
+  }
+  try { updateSfx(); } catch (e) {}
+}
+
 setInterval(function () {
+  // شاشة دور الكلام: تحديث موضعي خفيف بدل إعادة رسم الشاشة كلها
+  if (state && state.phase === "day" && state.speak) {
+    if (document.getElementById("spkTimer")) speakTick();
+    else render();   // الشاشة لسه مترسمتش — نرسمها مرة واحدة
+    return;
+  }
+  if (state && state.game === "task" && state.phase === "play" && state.deadline) {
+    var tt2 = document.querySelector(".timer");
+    if (tt2) tt2.textContent = mmss(Math.max(0, (state.deadline - Date.now()) / 1000));
+    return;
+  }
   if (state && (state.phase === "day" || state.phase === "vote") && state.deadline) {
     var t = document.querySelector(".timer");
     if (t) t.textContent = mmss(Math.max(0, (state.deadline - Date.now()) / 1000));
@@ -3242,6 +4476,9 @@ appEl.addEventListener("click", async function (e) {
     return;
   }
   if (k === "rerender") { render(); return; }
+  if (k === "pickGame") { pickedGame = parts[1]; connError = ""; render(); return; }
+  if (k === "backToGames") { pickedGame = null; render(); return; }
+  if (k === "createGame") { doCreate(pickedGame || "mafia"); return; }
   if (k === "create") { doCreate(); return; }
   if (k === "join") { doJoin(); return; }
   if (k === "resume") { doResume(); return; }
@@ -3255,7 +4492,7 @@ appEl.addEventListener("click", async function (e) {
     else { render(); }
     return;
   }
-  if (k === "about") { uiSheet = { t: "about" }; render(); return; }
+  if (k === "about") { uiSheet = { t: "about", game: pickedGame || (state && state.game) || "mafia" }; render(); return; }
 
   if (!client) return;
 
@@ -3300,6 +4537,29 @@ appEl.addEventListener("click", async function (e) {
     if (kp && confirm("تطلّع " + kp.name + " برّا الأوضة؟")) client.send({ t: "kick", id: kickId });
     return;
   }
+  if (k === "speakDone") { client.send({ t: "speakDone" }); return; }
+  if (k === "speakPause") { client.send({ t: "speakPause" }); return; }
+  if (k === "speakAdd") { client.send({ t: "speakAdd", sec: Number(parts[1]) || 15 }); return; }
+  if (k === "speakHand") { client.send({ t: "speakHand" }); return; }
+  if (k === "speakRestart") { client.send({ t: "speakRestart" }); return; }
+  if (k === "askMic") { voiceAskMic(); return; }
+  if (k === "voiceSec") {
+    var vs = Math.max(15, Math.min(120, (state.cfg.speakSeconds || 45) + Number(parts[1])));
+    client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { speakSeconds: vs }) });
+    return;
+  }
+  if (k === "openSec") {
+    var os = Math.max(0, Math.min(120, (state.cfg.openFloorSeconds || 0) + Number(parts[1])));
+    client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { openFloorSeconds: os }) });
+    return;
+  }
+  if (k === "taskDone") { client.send({ t: "taskDone" }); return; }
+  if (k === "suspect") { client.send({ t: "suspect", target: parts[1] === "null" ? null : Number(parts[1]) }); return; }
+  if (k === "endRound") { if (confirm("تقفل الجولة دلوقتي وتشوف النتيجة؟")) client.send({ t: "endRound" }); return; }
+  if (k === "nextRound") { client.send({ t: "nextRound" }); return; }
+  if (k === "tt") { var tk = parts[1], tp = {}; tp[tk] = !state.cfg[tk]; client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, tp) }); return; }
+  if (k === "taskRounds") { var nr = Math.max(1, Math.min(10, (state.cfg.rounds || 1) + Number(parts[1]))); client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { rounds: nr }) }); return; }
+  if (k === "taskMin") { var nm2 = Math.max(1, Math.min(15, (state.cfg.minutes || 10) + Number(parts[1]))); client.send({ t: "cfg", cfg: Object.assign({}, state.cfg, { minutes: nm2 }) }); return; }
   if (k === "voteStat") { voteStatIdx = Number(parts[1]); renderVoteStat(); return; }
   if (k === "votePick") {
     var vid = Number(parts[1]);
