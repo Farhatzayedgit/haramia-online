@@ -23,21 +23,23 @@
  */
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 :root{
-  --ink:#16122A;--ink2:#221C3D;--ink3:#2C2450;--line:#3B3168;
-  --parch:#F3E9D6;--muted:#A398C7;--faint:#6F639A;
-  --saffron:#E9A33C;--madder:#D1483F;--teal:#3EA08D;--violet:#9B6BD6;
+  --ink:#120E24;--ink2:#1D1738;--ink3:#292152;--line:#3E3470;
+  --parch:#F6EEDD;--muted:#AB9FD0;--faint:#6E6299;
+  --saffron:#F0AE45;--gold:#FFD27D;--madder:#E05248;--teal:#37B39C;--violet:#A576E4;--rose:#E88CB8;
   --disp:'Lalezar','Tajawal','Noto Kufi Arabic',system-ui,sans-serif;
   --logo:'Rakkas','Lalezar','Noto Kufi Arabic',serif;
   --body:'Tajawal','Noto Kufi Arabic',system-ui,sans-serif;
+  --glow:0 0 0 1px rgba(255,255,255,.04),0 10px 30px rgba(0,0,0,.4);
 }
 html,body{margin:0;padding:0;height:100%;overscroll-behavior:none}
 body{
   background:var(--ink);color:var(--parch);font-family:var(--body);
   -webkit-user-select:none;user-select:none;
   background-image:
-    radial-gradient(ellipse 130% 55% at 50% -12%,rgba(233,163,60,.2),rgba(22,18,42,0) 65%),
-    radial-gradient(ellipse 100% 45% at 50% 112%,rgba(90,60,160,.14),rgba(22,18,42,0) 60%),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='56'><g fill='none' stroke='%23F3E9D6' stroke-opacity='.055'><rect x='14' y='14' width='28' height='28'/><rect x='14' y='14' width='28' height='28' transform='rotate(45 28 28)'/><circle cx='28' cy='28' r='3.5'/></g></svg>");
+    radial-gradient(ellipse 120% 50% at 50% -10%,rgba(240,174,69,.22),rgba(18,14,36,0) 60%),
+    radial-gradient(ellipse 90% 45% at 50% 114%,rgba(165,118,228,.18),rgba(18,14,36,0) 62%),
+    radial-gradient(ellipse 70% 40% at 12% 30%,rgba(55,179,156,.07),rgba(18,14,36,0) 55%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><g fill='none' stroke='%23F6EEDD' stroke-opacity='.05'><rect x='15' y='15' width='30' height='30' rx='3'/><rect x='15' y='15' width='30' height='30' rx='3' transform='rotate(45 30 30)'/><circle cx='30' cy='30' r='3.5'/></g></svg>");
   background-attachment:fixed;
 }
 #app{max-width:460px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 10px) 18px calc(env(safe-area-inset-bottom) + 20px);
@@ -50,18 +52,20 @@ body{
   color:var(--parch);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px}
 .ico:active{transform:scale(.94)}
 .tag{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;white-space:nowrap}
-.logo{font-family:var(--logo);font-size:44px;line-height:1.25;text-align:center;margin:0}
+.logo{font-family:var(--logo);font-size:46px;line-height:1.2;text-align:center;margin:0;
+  background:linear-gradient(180deg,#FFE1A0,#F0AE45 60%,#D98A22);-webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;filter:drop-shadow(0 3px 8px rgba(240,174,69,.3))}
 .logo .g{color:var(--saffron)}
-h1.t{font-family:var(--disp);font-size:30px;line-height:1.4;margin:0 0 6px;font-weight:400}
+h1.t{font-family:var(--disp);font-size:31px;line-height:1.4;margin:0 0 6px;font-weight:400}
 h2.t{font-family:var(--disp);font-size:21px;line-height:1.5;margin:0 0 4px;font-weight:400}
 p.d{font-size:15px;line-height:1.75;color:var(--muted);margin:0}
-.eb{font-size:12.5px;font-weight:700;letter-spacing:2px;color:var(--saffron);margin:0 0 10px}
+.eb{font-size:12px;font-weight:800;letter-spacing:2.5px;color:var(--saffron);margin:0 0 10px;text-transform:uppercase}
 .fine{font-size:11.5px;color:var(--faint);line-height:1.9;text-align:center}
-.btn{width:100%;border:none;border-radius:16px;padding:17px 18px;font-family:var(--disp);font-size:19px;
-  letter-spacing:.4px;background:linear-gradient(180deg,#F5BC66,#DE9226);color:#221602;cursor:pointer;
+.btn{width:100%;border:none;border-radius:17px;padding:17px 18px;font-family:var(--disp);font-size:19px;
+  letter-spacing:.4px;background:linear-gradient(180deg,#FFD27D,#F0AE45 55%,#DD9126);color:#2A1A02;cursor:pointer;
   display:block;text-align:center;transition:transform .1s,box-shadow .1s;
-  box-shadow:0 5px 0 #8E5E14,0 10px 20px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.4)}
-.btn:active{transform:translateY(3px);box-shadow:0 2px 0 #8E5E14,0 5px 10px rgba(0,0,0,.3)}
+  box-shadow:0 5px 0 #94620F,0 11px 22px rgba(240,174,69,.28),inset 0 1px 0 rgba(255,255,255,.5)}
+.btn:active{transform:translateY(3px);box-shadow:0 2px 0 #94620F,0 5px 10px rgba(0,0,0,.3)}
 .btn:disabled{opacity:.32}
 .btn.ghost{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.01));
   border:1px solid var(--line);color:var(--parch);box-shadow:0 3px 8px rgba(0,0,0,.3)}
@@ -74,8 +78,34 @@ p.d{font-size:15px;line-height:1.75;color:var(--muted);margin:0}
 .btn.violet:active{transform:translateY(3px);box-shadow:0 2px 0 #4A2A78}
 .btn.sm{padding:12px 14px;font-size:16px;border-radius:13px}
 .stack{display:flex;flex-direction:column;gap:10px}
-.card{background:linear-gradient(180deg,#262046,#1E1938);border:1px solid rgba(255,255,255,.07);
-  border-radius:20px;padding:16px;box-shadow:0 8px 22px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.05)}
+.brandmark{display:inline-flex;padding:14px;border-radius:22px;
+  background:radial-gradient(circle at 50% 40%,rgba(240,174,69,.14),rgba(255,255,255,.02));
+  border:1px solid rgba(255,255,255,.06)}
+.gcard{width:100%;text-align:right;border:1px solid var(--gc);
+  background:rgba(255,255,255,.03);
+  border-radius:20px;padding:16px;cursor:pointer;display:flex;align-items:center;gap:14px;
+  transition:transform .12s,box-shadow .12s;box-shadow:0 8px 22px rgba(0,0,0,.3)}
+@supports (background:color-mix(in srgb,red,blue)){
+  .gcard{border-color:color-mix(in srgb,var(--gc) 40%,transparent);
+    background:linear-gradient(135deg,color-mix(in srgb,var(--gc) 14%,transparent),rgba(255,255,255,.015))}
+  .gcard-ico{background:color-mix(in srgb,var(--gc) 16%,transparent);border-color:color-mix(in srgb,var(--gc) 30%,transparent)}
+  .gcard-tag{background:color-mix(in srgb,var(--gc) 15%,transparent)}
+}
+.gcard:active{transform:translateY(2px) scale(.995);box-shadow:0 4px 12px rgba(0,0,0,.3)}
+.gcard-ico{flex:none;color:var(--gc);display:flex;padding:9px;border-radius:14px;
+  background:rgba(255,255,255,.05);border:1px solid var(--gc)}
+.gcard-body{flex:1;min-width:0}
+.gcard-title{display:block;font-family:var(--disp);font-size:20px;color:var(--parch)}
+.gcard-desc{display:block;font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.55}
+.gcard-tag{display:inline-block;margin-top:7px;font-size:10.5px;font-weight:800;letter-spacing:.5px;
+  color:var(--gc);background:rgba(255,255,255,.06);border-radius:8px;padding:3px 8px}
+.gcard-arr{flex:none;color:var(--gc);font-size:22px}
+.orline{display:flex;align-items:center;gap:12px;margin:16px 2px 12px;color:var(--faint);font-size:12px}
+.orline::before,.orline::after{content:"";flex:1;height:1px;background:var(--line)}
+.codebox{display:flex;gap:8px}
+.codein{flex:1;text-align:center;letter-spacing:8px;font-family:var(--disp);font-size:24px;text-transform:uppercase}
+.card{background:linear-gradient(180deg,#282152,#1C1638);border:1px solid rgba(255,255,255,.08);
+  border-radius:20px;padding:16px;box-shadow:0 10px 26px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.06)}
 .soft{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
   border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:14px 16px;
   box-shadow:0 5px 14px rgba(0,0,0,.3)}
@@ -190,9 +220,12 @@ svg{display:block}
   box-shadow:0 0 8px var(--saffron);animation:pulse2 1.6s ease-in-out infinite}
 .netbar.warn .dot{background:#E85C55;box-shadow:0 0 8px #E85C55}
 @keyframes pulse2{0%,100%{opacity:1}50%{opacity:.35}}
-.codebig{font-family:var(--disp);font-size:56px;letter-spacing:12px;color:var(--saffron);
-  text-align:center;text-shadow:0 4px 20px rgba(233,163,60,.3)}
-.codehint{text-align:center;font-family:var(--body);font-size:13px;color:var(--muted);margin-top:4px}
+.codebig{font-family:var(--disp);font-size:52px;letter-spacing:14px;
+  background:linear-gradient(180deg,var(--gold),var(--saffron));-webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;text-align:center;padding:14px 10px;margin:2px 0;
+  border:1px dashed rgba(240,174,69,.4);border-radius:16px;
+  background-color:rgba(240,174,69,.06)}
+.codehint{text-align:center;font-family:var(--body);font-size:13px;color:var(--muted);margin-top:8px}
 .resumeCard{background:linear-gradient(180deg,rgba(155,107,214,.16),rgba(155,107,214,.04));
   border:1px solid rgba(155,107,214,.35);border-radius:18px;padding:16px;margin-bottom:14px}
 .plist{display:flex;flex-direction:column;gap:0}
@@ -2519,8 +2552,9 @@ function doCreate(game) {
 }
 async function doJoin() {
   var code = joinCode.trim().toUpperCase();
-  if (code.length !== 4 || !myName.trim()) return;
-  localStorage.setItem("haramia-name", myName.trim());
+  if (!myName.trim()) { connError = "اكتب اسمك الأول."; render(); return; }
+  if (code.length !== 4) { connError = "الكود لازم يكون ٤ حروف."; render(); return; }
+  try { localStorage.setItem("haramia-name", myName.trim()); } catch (e) {}
   makeClient(myName.trim());
   var exists = await client.roomExists(code);
   if (!exists) { connError = "مفيش أوضة بالكود ده. تأكد من الكود مع صاحب الأوضة."; client = null; render(); return; }
@@ -2650,8 +2684,9 @@ var pickedGame = null; // "mafia" | "task" | null (شاشة اختيار الل�
 function homeScreen() {
   // شاشة اختيار اللعبة — الشلة
   if (!pickedGame) {
-    var h = '<div class="mid" style="padding-top:6px"><div class="ctr fade">' +
-      '<h1 class="logo" style="margin-top:4px">ال<span style="color:var(--saffron)">شلّة</span></h1>' +
+    var h = '<div class="mid" style="padding-top:14px"><div class="ctr fade">' +
+      '<div class="brandmark">' + shellaMark(58) + "</div>" +
+      '<h1 class="logo" style="margin-top:10px;font-size:52px">الشلّة</h1>' +
       '<p class="d" style="max-width:300px;margin:10px auto 0">ألعاب جماعية بالمصري — إنتوا وأصحابكم، كل واحد على موبايله. اختار لعبة وابدأوا.</p></div></div>';
     if (savedSession) {
       h += '<div class="resumeCard"><p class="eb" style="color:var(--violet)">لسه فاتح</p>' +
@@ -2659,42 +2694,54 @@ function homeScreen() {
         (savedSession.wasHost ? " كمستضيف." : ".") + "</p>" +
         '<button class="btn violet" data-a="resume">كمّل نفس اللعبة</button></div>';
     }
-    h += '<div class="stack" style="gap:12px">';
-    h += gameCard("mafia", "حرامية وأهل القرية", "لعبة أدوار وخداع — لاقوا الحرامية قبل ما يكسبوا", "thief", "var(--madder)");
-    h += gameCard("task", "المهمة السرية", "كل واحد معاه مهمة سرية ينفّذها من غير ما حد ياخد باله", "villager", "var(--teal)");
+    h += '<p class="eb ctr" style="margin:6px 0 12px;text-align:center">اختار لعبة</p>';
+    h += '<div class="stack" style="gap:13px">';
+    h += gameCard("mafia", "حرامية وأهل القرية", "لعبة أدوار وخداع — لاقوا الحرامية قبل ما يكسبوا", "thief", "var(--madder)", "٥–١٥ لاعب");
+    h += gameCard("task", "المهمة السرية", "كل واحد معاه مهمة سرية ينفّذها من غير ما حد ياخد باله", "villager", "var(--teal)", "٣–١٥ لاعب");
     h += "</div>";
-    h += '<div class="stack" style="margin-top:14px"><div style="display:flex;gap:8px">' +
-      '<input class="input" style="flex:1;text-align:center;letter-spacing:6px;font-family:var(--disp);font-size:22px" placeholder="عندك كود؟" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
-      '<button class="btn dark" style="flex:1" data-a="join">ادخل بالكود</button></div></div>';
     if (connError) h += '<div class="errbox" style="margin-top:12px">' + esc(connError) + "</div>";
     return h;
   }
 
-  // شاشة الاسم + إنشاء أوضة للّعبة المختارة
+  // شاشة الاسم + إنشاء/دخول أوضة للّعبة المختارة
   var isTask = pickedGame === "task";
   var title = isTask ? "المهمة السرية" : "حرامية وأهل القرية";
-  var g = '<div class="mid" style="padding-top:10px"><div class="ctr fade">' +
-    ctrEmblem(isTask ? "villager" : "thief", 64, isTask ? "var(--teal)" : "var(--saffron)") +
-    '<h1 class="logo" style="margin-top:8px;font-size:30px">' + title + "</h1>" +
+  var accent = isTask ? "var(--teal)" : "var(--madder)";
+  var g = '<button class="btn ghost sm" style="width:auto;margin:2px 0 6px;padding:8px 14px;font-size:14px" data-a="backToGames">→ كل الألعاب</button>';
+  g += '<div class="mid" style="padding-top:2px"><div class="ctr fade">' +
+    '<div class="brandmark" style="--mc:' + accent + '">' + ctrEmblem(isTask ? "villager" : "thief", 56, accent) + "</div>" +
+    '<h1 class="logo" style="margin-top:10px;font-size:30px;-webkit-text-fill-color:var(--parch);background:none;filter:none">' + title + "</h1>" +
     '<p class="d" style="max-width:290px;margin:10px auto 0">' +
     (isTask ? "قاعدين بتتكلموا عادي، وكل واحد بينفّذ مهمته في السر. اللي يتكشف يخسر."
       : "كل واحد ياخد دور سري. أهل القرية بيدوّروا على الحرامية بالتصويت.") + "</p></div></div>";
   g += '<div class="stack">' +
-    '<input class="input" placeholder="اسمك" maxlength="14" value="' + esc(myName) + '" data-bind="name">' +
-    '<button class="btn" data-a="createGame">اعمل أوضة جديدة</button>' +
-    '<button class="btn ghost sm" data-a="backToGames">← ارجع لاختيار اللعبة</button></div>';
+    '<input class="input" placeholder="اكتب اسمك" maxlength="14" value="' + esc(myName) + '" data-bind="name">' +
+    '<button class="btn" data-a="createGame">اعمل أوضة جديدة</button></div>';
+  // دخول بكود — جوّه اللعبة نفسها زي ما طلبت
+  g += '<div class="orline"><span>أو ادخل أوضة موجودة</span></div>';
+  g += '<div class="codebox">' +
+    '<input class="input codein" placeholder="الكود" maxlength="4" data-bind="code" value="' + esc(joinCode) + '">' +
+    '<button class="btn dark" style="margin:0" data-a="join">ادخل بالكود</button></div>';
   g += '<button class="btn ghost sm mt" data-a="about">' + (isTask ? "إزاي بنلعب" : "الأدوار وقواعد اللعب") + "</button>";
   return g;
 }
 
-function gameCard(id, title, desc, emblem, color) {
-  return '<button data-a="pickGame:' + id + '" style="width:100%;text-align:right;border:1px solid ' + color +
-    '55;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01));border-radius:18px;' +
-    'padding:16px;cursor:pointer;display:flex;align-items:center;gap:14px">' +
-    '<span style="flex:none;color:' + color + '">' + ctrEmblem(emblem, 46, color) + "</span>" +
-    '<span style="flex:1;min-width:0"><span style="display:block;font-family:var(--disp);font-size:19px;color:var(--parch)">' + title + "</span>" +
-    '<span style="display:block;font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.5">' + desc + "</span></span>" +
-    '<span style="flex:none;color:' + color + ';font-size:20px">›</span></button>';
+/** ماركة الشلّة — نجمة ثمانية بلونين */
+function shellaMark(size) {
+  var s = size || 56;
+  return '<svg width="' + s + '" height="' + s + '" viewBox="0 0 64 64" fill="none" style="filter:drop-shadow(0 4px 12px rgba(240,174,69,.35))">' +
+    '<rect x="12" y="12" width="40" height="40" rx="7" stroke="var(--saffron)" stroke-width="3"/>' +
+    '<rect x="12" y="12" width="40" height="40" rx="7" transform="rotate(45 32 32)" stroke="var(--violet)" stroke-width="3"/>' +
+    '<circle cx="32" cy="32" r="7" fill="var(--saffron)"/></svg>';
+}
+
+function gameCard(id, title, desc, emblem, color, tag) {
+  return '<button data-a="pickGame:' + id + '" class="gcard" style="--gc:' + color + '">' +
+    '<span class="gcard-ico">' + ctrEmblem(emblem, 40, color) + "</span>" +
+    '<span class="gcard-body"><span class="gcard-title">' + title + "</span>" +
+    '<span class="gcard-desc">' + desc + "</span>" +
+    (tag ? '<span class="gcard-tag">' + tag + "</span>" : "") + "</span>" +
+    '<span class="gcard-arr">›</span></button>';
 }
 
 var DISCORD_VOICE_LINK = "https://discord.gg/qhSuRbfzZ";
