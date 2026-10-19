@@ -1,0 +1,87 @@
+name: بناء الأبليكيشن
+
+# بيشتغل لوحده مع كل تعديل على فرع v2، وكمان تقدر تشغّله بإيدك من تبويب Actions
+on:
+  push:
+    branches: [v2]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-build
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: تجهيز اللعبة
+        run: |
+          npm install
+          python3 src/build.py
+          npx cap sync android
+
+      - name: مفتاح التوقيع
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
+            echo "$KS_B64" | base64 -d > android/release.jks
+            printf "storeFile=release.jks\nstorePassword=%s\nkeyAlias=haramiya\nkeyPassword=%s\n" "$KS_PASS" "$KS_PASS" > android/keystore.properties
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::مفتاح التوقيع مش متحط في الإعدادات السرية — هتطلع نسخة تجريبية متوقّعة بمفتاح مؤقت"
+            echo "SIGNED=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: بناء الـAPK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          if [ "$SIGNED" = "1" ]; then
+            ./gradlew assembleRelease --no-daemon --stacktrace
+            cp app/build/outputs/apk/release/app-release.apk ../haramiya.apk
+          else
+            ./gradlew assembleDebug --no-daemon --stacktrace
+            cp app/build/outputs/apk/debug/app-debug.apk ../haramiya.apk
+          fi
+
+      - name: تسمية الملف
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          NAME="haramiya-v${VER}-${GITHUB_RUN_NUMBER}.apk"
+          mv haramiya.apk "$NAME"
+          echo "APK=$NAME" >> "$GITHUB_ENV"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          rm -f android/release.jks android/keystore.properties
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK }}
+          path: ${{ env.APK }}
+
+      - name: نشر رابط التنزيل
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-v${{ env.VER }}-${{ github.run_number }}
+          name: حرامية وأهل قرية — نسخة ${{ env.VER }} (بناء ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: ${{ env.APK }}
+          body: |
+            افتح الرابط من الموبايل ونزّل ملف الـAPK اللي تحت، وسطّبه.
+            ${{ env.SIGNED == '1' && 'النسخة دي متوقّعة بمفتاح الأبليكيشن الأصلي، فهتتسطب فوق النسخة القديمة.' || 'تنبيه: النسخة دي تجريبية بمفتاح مؤقت — امسح النسخة القديمة الأول.' }}

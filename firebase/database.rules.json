@@ -1,0 +1,44 @@
+{
+  "rules": {
+    "haramiya": {
+      "rooms": {
+        "$code": {
+          "state": {
+            ".read": "auth != null",
+            ".write": "auth != null && ((!data.exists() && newData.child('hostId').val() === auth.uid) || data.child('hostId').val() === auth.uid)"
+          },
+          "created": {
+            ".read": "auth != null",
+            ".write": "auth != null && root.child('haramiya/rooms/' + $code + '/state/hostId').val() === auth.uid"
+          },
+          "actions": {
+            ".read": "auth != null && root.child('haramiya/rooms/' + $code + '/state/hostId').val() === auth.uid",
+            "$a": {
+              ".write": "auth != null && ((!data.exists() && newData.child('pid').val() === auth.uid) || (!newData.exists() && root.child('haramiya/rooms/' + $code + '/state/hostId').val() === auth.uid))"
+            }
+          }
+        }
+      },
+      "rtc": {
+        "$code": {
+          "$to": {
+            ".read": "auth != null && auth.uid === $to",
+            "$from": {
+              ".write": "auth != null && (auth.uid === $from || auth.uid === $to)"
+            }
+          }
+        }
+      },
+      "ice": {
+        "$code": {
+          "$to": {
+            ".read": "auth != null && auth.uid === $to",
+            "$k": {
+              ".write": "auth != null && ((!data.exists() && newData.child('from').val() === auth.uid) || auth.uid === $to)"
+            }
+          }
+        }
+      }
+    }
+  }
+}

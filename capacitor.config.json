@@ -1,0 +1,11 @@
+{
+  "appId": "com.movera.haramiya",
+  "appName": "حرامية وأهل قرية",
+  "webDir": "www",
+  "backgroundColor": "#1F2A44",
+  "android": {
+    "backgroundColor": "#1F2A44",
+    "adjustMarginsForEdgeToEdge": "force",
+    "allowMixedContent": false
+  }
+}

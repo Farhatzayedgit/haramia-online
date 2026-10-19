@@ -1,0 +1,17 @@
+{
+  "name": "haramiya",
+  "version": "1.1.0",
+  "private": true,
+  "description": "لعبة حرامية وأهل قرية — Movera Productions",
+  "scripts": {
+    "build": "python3 src/build.py",
+    "sync": "python3 src/build.py && npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "7.6.9",
+    "@capacitor/core": "7.6.9"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.6.9"
+  }
+}
