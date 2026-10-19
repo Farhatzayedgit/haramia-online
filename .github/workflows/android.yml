@@ -17,13 +17,13 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -40,7 +40,16 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
-            echo "$KS_B64" | base64 -d > android/release.jks
+            # بننضّف أي مسافات أو سطور زيادة اتضافت وقت اللصق
+            KS_PASS=$(printf '%s' "$KS_PASS" | tr -d '\r\n\t ')
+            if ! printf '%s' "$KS_B64" | tr -cd 'A-Za-z0-9+/=' | base64 -d > android/release.jks 2>/dev/null; then
+              echo "::error::السر ANDROID_KEYSTORE_BASE64 ناقص أو متلخبط — انسخ السطر الطويل كامل من الملف والصقه تاني"
+              exit 1
+            fi
+            if ! keytool -list -keystore android/release.jks -storepass "$KS_PASS" -alias haramiya >/dev/null 2>&1; then
+              echo "::error::المفتاح اتفك بس كلمة السر مش مظبوطة — اتأكد من السر ANDROID_KEYSTORE_PASSWORD"
+              exit 1
+            fi
             printf "storeFile=release.jks\nstorePassword=%s\nkeyAlias=haramiya\nkeyPassword=%s\n" "$KS_PASS" "$KS_PASS" > android/keystore.properties
             echo "SIGNED=1" >> "$GITHUB_ENV"
           else
