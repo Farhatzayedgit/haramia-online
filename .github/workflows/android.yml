@@ -36,14 +36,14 @@ jobs:
 
       - name: مفتاح التوقيع
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
+          if [ -n "$KS_PASS" ]; then
             # بننضّف أي مسافات أو سطور زيادة اتضافت وقت اللصق
             KS_PASS=$(printf '%s' "$KS_PASS" | tr -d '\r\n\t ')
-            if ! printf '%s' "$KS_B64" | tr -cd 'A-Za-z0-9+/=' | base64 -d > android/release.jks 2>/dev/null; then
-              echo "::error::السر ANDROID_KEYSTORE_BASE64 ناقص أو متلخبط — انسخ السطر الطويل كامل من الملف والصقه تاني"
+            # المفتاح متخزّن في المستودع متشفّر (android/release.jks.enc) — مبيتفكّش غير بكلمة السر
+            if ! KS_PASS="$KS_PASS" openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in android/release.jks.enc -out android/release.jks -pass env:KS_PASS 2>/dev/null; then
+              echo "::error::كلمة السر في ANDROID_KEYSTORE_PASSWORD مش مظبوطة — مش قادرين نفك مفتاح التوقيع"
               exit 1
             fi
             if ! keytool -list -keystore android/release.jks -storepass "$KS_PASS" -alias haramiya >/dev/null 2>&1; then
